@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "khephri.worldline",
   "name": "WORLDLINE",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Khephri Labs",
   "license": "MIT",
   "description": "Branch, inspect, measure, and atomically collapse reconstructable computational realities.",

@@ -27,8 +27,11 @@ layer that:
 
 - puts a compact **globe** in the top bar, colored by the proof state of the
   active reality,
-- opens a full-screen **multiverse graph** where every forked world is a node —
-  colored by state, wired to its parent, and inspectable in a side panel,
+- opens a full-screen **mission control** — the multiverse graph flanked by
+  live panels: PRIME and its managed roots, the last collapse receipt (with
+  invariant-preservation state and non-claims), a world census, recent jobs,
+  every capability probe with its honest `UNAVAILABLE` reason, the usable
+  adapters, and a per-world evidence inspector,
 - drives **fork**, **race**, **collapse**, and **return** through the
   `worldline` CLI, with a two-step confirmation before anything touches your
   real files.
@@ -49,10 +52,16 @@ authorizes every collapse through a formally-proved kernel — see
 
 <img src="assets/bar.png" alt="WORLDLINE bar widget" width="620">
 
-**Multiverse overlay** — the fork tree, state-colored nodes, and a per-world
-inspector with the base, delta, contamination, and receipt:
+**Mission control** — the fork tree with generation guides and per-node
+evidence badges, flanked by reality/receipt/census/jobs/capability/adapter
+panels on the left and the evidence inspector on the right:
 
-<img src="assets/multiverse.png" alt="WORLDLINE multiverse overlay" width="100%">
+<img src="assets/multiverse.png" alt="WORLDLINE mission control" width="100%">
+
+**Fork editor** — one mission, raced by whichever three adapters are actually
+`AVAILABLE`, with the spend stated up front:
+
+<img src="assets/fork.png" alt="WORLDLINE fork editor" width="100%">
 
 ## Features
 
