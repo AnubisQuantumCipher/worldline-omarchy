@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "id": "khephri.worldline",
+  "name": "WORLDLINE",
+  "version": "1.0.0",
+  "author": "Khephri Labs",
+  "license": "MIT",
+  "description": "Branch, inspect, measure, and atomically collapse reconstructable computational realities.",
+  "kinds": [
+    "service",
+    "overlay",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "WorldlineService.qml",
+    "overlay": "Multiverse.qml",
+    "barWidget": "WorldlineBar.qml"
+  },
+  "barWidget": {
+    "displayName": "WORLDLINE",
+    "description": "Current reality, agent, delta, evidence state, and multiverse entry point.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "motionEnabled": true,
+      "worldTintEnabled": true
+    },
+    "schema": [
+      {
+        "key": "motionEnabled",
+        "type": "boolean",
+        "label": "Collapse motion",
+        "defaultValue": true
+      },
+      {
+        "key": "worldTintEnabled",
+        "type": "boolean",
+        "label": "Alternate-world tint",
+        "defaultValue": true
+      }
+    ]
+  }
+}
