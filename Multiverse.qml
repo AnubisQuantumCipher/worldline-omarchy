@@ -173,6 +173,7 @@ Item {
     if (checks.length === 0 && proofs.length === 0) return "UNASSESSED"
     for (var i = 0; i < checks.length; i++) if (checks[i].status === "FAIL") return "FAIL"
     for (var p = 0; p < proofs.length; p++) if (proofs[p].status !== "PASS") return "FAIL"
+    for (var u = 0; u < checks.length; u++) if (checks[u].status !== "PASS") return "UNASSESSED"
     return "PASS"
   }
 
@@ -229,7 +230,9 @@ Item {
         state: String(j.state || "?"),
         alias: w ? shortAlias(w) : String(j.world || "").substring(0, 8),
         dur: fmtDur(j.started, j.ended),
-        error: j.error ? String(j.error) : ""
+        error: j.error ? String(typeof j.error === "object"
+          ? (j.error.message || j.error.code || JSON.stringify(j.error))
+          : j.error) : ""
       })
     }
     return out
@@ -284,7 +287,7 @@ Item {
 
   function fileLabel(f) {
     if (typeof f === "string") return f
-    if (f && typeof f === "object") return String(f.path || f.file || JSON.stringify(f))
+    if (f && typeof f === "object") return String(f.pathDisplay || f.path || f.file || JSON.stringify(f))
     return String(f)
   }
 
@@ -331,9 +334,9 @@ Item {
     if (!hasSelection || actionProcess.running) return
     actionError = ""
     if (actionKind === "return")
-      actionProcess.command = ["worldline", "return", selectedWorld.alias, "--yes"]
+      actionProcess.command = ["worldline", "return", "--yes", "--", selectedWorld.alias]
     else
-      actionProcess.command = ["worldline", "collapse", selectedWorld.alias, "--yes"]
+      actionProcess.command = ["worldline", "collapse", "--yes", "--", selectedWorld.alias]
     actionProcess.running = true
   }
 
@@ -410,7 +413,7 @@ Item {
 
   // ------------------------------------------------------------ reusable bits
 
-  component SectionTitle: Text {
+  component SectionTitle: Text { textFormat: Text.PlainText;
     color: Color.muted
     font.family: Style.font.family
     font.pixelSize: Style.font.caption
@@ -440,9 +443,9 @@ Item {
     property color vColor: Color.foreground
     Layout.fillWidth: true
     spacing: Style.spacing.sm
-    Text { text: parent.k; color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
+    Text { textFormat: Text.PlainText; text: parent.k; color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
     Item { Layout.fillWidth: true }
-    Text {
+    Text { textFormat: Text.PlainText;
       Layout.maximumWidth: Style.space(200)
       text: parent.v; color: parent.vColor
       font.family: Style.font.family; font.pixelSize: Style.font.caption
@@ -460,7 +463,7 @@ Item {
     color: Util.alpha(tone, 0.14)
     border.color: Util.alpha(tone, 0.6)
     border.width: 1
-    Text {
+    Text { textFormat: Text.PlainText;
       id: chipText
       anchors.centerIn: parent
       text: parent.label
@@ -522,7 +525,7 @@ Item {
         RowLayout {
           Layout.fillWidth: true
           spacing: Style.spacing.md
-          Text {
+          Text { textFormat: Text.PlainText;
             text: "W O R L D L I N E"
             color: Color.foreground
             font.family: Style.font.family
@@ -530,7 +533,7 @@ Item {
             font.bold: true
             font.letterSpacing: Style.space(1)
           }
-          Text {
+          Text { textFormat: Text.PlainText;
             text: "MISSION CONTROL"
             color: Color.muted
             font.family: Style.font.family
@@ -572,7 +575,7 @@ Item {
             visible: root.mode === "fork"
             spacing: Style.spacing.lg
 
-            Text {
+            Text { textFormat: Text.PlainText;
               Layout.alignment: Qt.AlignHCenter
               text: root.initialized ? "●  FORK FROM " + root.primeLabel : "No PRIME — run worldline init /path/to/work"
               color: root.initialized ? Color.accent : Color.urgent
@@ -590,7 +593,7 @@ Item {
                   required property var modelData
                   required property int index
                   spacing: Style.spacing.sm
-                  Text {
+                  Text { textFormat: Text.PlainText;
                     Layout.alignment: Qt.AlignHCenter
                     text: "WORLD " + ["α", "β", "γ"][index]
                     color: Color.foreground
@@ -598,7 +601,7 @@ Item {
                     font.pixelSize: Style.font.title
                     font.bold: true
                   }
-                  Text {
+                  Text { textFormat: Text.PlainText;
                     Layout.alignment: Qt.AlignHCenter
                     text: String(modelData).toUpperCase()
                     color: Color.accent
@@ -632,7 +635,7 @@ Item {
             }
             RowLayout {
               Layout.fillWidth: true
-              Text {
+              Text { textFormat: Text.PlainText;
                 Layout.fillWidth: true
                 text: "A race runs three agents concurrently — roughly triple the model spend of a single fork."
                 color: Color.muted
@@ -684,7 +687,7 @@ Item {
                       required property var modelData
                       Layout.fillWidth: true
                       spacing: 0
-                      Text {
+                      Text { textFormat: Text.PlainText;
                         Layout.fillWidth: true
                         text: (modelData.primary ? "★ " : "· ") + String(modelData.path || "")
                         color: Color.foreground
@@ -692,7 +695,7 @@ Item {
                         font.pixelSize: Style.font.caption
                         elide: Text.ElideLeft
                       }
-                      Text {
+                      Text { textFormat: Text.PlainText;
                         text: String(modelData.kind || "")
                         color: Color.muted
                         font.family: Style.font.family
@@ -753,9 +756,9 @@ Item {
                       Layout.fillWidth: true
                       spacing: Style.spacing.sm
                       Rectangle { width: Style.space(8); height: width; radius: width / 2; color: root.stateColor(modelData.state) }
-                      Text { text: modelData.state; color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.caption }
+                      Text { textFormat: Text.PlainText; text: modelData.state; color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.caption }
                       Item { Layout.fillWidth: true }
-                      Text { text: String(modelData.count); color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true }
+                      Text { textFormat: Text.PlainText; text: String(modelData.count); color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true }
                     }
                   }
                 }
@@ -772,21 +775,21 @@ Item {
                       RowLayout {
                         Layout.fillWidth: true
                         spacing: Style.spacing.sm
-                        Text {
+                        Text { textFormat: Text.PlainText;
                           text: modelData.state
                           color: modelData.state === "RUNNING" ? Color.accent
                                : (modelData.state === "DEGRADED" || modelData.state === "FAILED" ? Color.urgent : Color.muted)
                           font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true
                         }
-                        Text {
+                        Text { textFormat: Text.PlainText;
                           Layout.fillWidth: true
                           text: modelData.alias; color: Color.foreground
                           font.family: Style.font.family; font.pixelSize: Style.font.caption
                           elide: Text.ElideRight
                         }
-                        Text { text: modelData.dur; color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
+                        Text { textFormat: Text.PlainText; text: modelData.dur; color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
                       }
-                      Text {
+                      Text { textFormat: Text.PlainText;
                         visible: modelData.error !== ""
                         Layout.fillWidth: true
                         text: modelData.error
@@ -812,9 +815,9 @@ Item {
                         border.color: modelData.ok ? Color.accent : Color.muted
                         border.width: 1
                       }
-                      Text { text: modelData.name; color: modelData.ok ? Color.foreground : Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
+                      Text { textFormat: Text.PlainText; text: modelData.name; color: modelData.ok ? Color.foreground : Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
                       Item { Layout.fillWidth: true }
-                      Text {
+                      Text { textFormat: Text.PlainText;
                         Layout.maximumWidth: Style.space(130)
                         text: modelData.note; color: Color.muted
                         font.family: Style.font.family; font.pixelSize: Style.font.caption
@@ -840,13 +843,13 @@ Item {
                         border.color: modelData.state === "AVAILABLE" ? Color.accent : Color.muted
                         border.width: 1
                       }
-                      Text {
+                      Text { textFormat: Text.PlainText;
                         text: String(modelData.name || "")
                         color: modelData.state === "AVAILABLE" ? Color.foreground : Color.muted
                         font.family: Style.font.family; font.pixelSize: Style.font.caption
                       }
                       Item { Layout.fillWidth: true }
-                      Text {
+                      Text { textFormat: Text.PlainText;
                         text: String(modelData.state || "")
                         color: modelData.state === "AVAILABLE" ? Color.accent : Color.muted
                         font.family: Style.font.family; font.pixelSize: Style.font.caption
@@ -1090,22 +1093,22 @@ Item {
                     required property var modelData
                     spacing: Style.spacing.xs
                     Rectangle { width: Style.space(7); height: width; radius: width / 2; color: root.stateColor(modelData); anchors.verticalCenter: parent.verticalCenter }
-                    Text { text: modelData; color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
+                    Text { textFormat: Text.PlainText; text: modelData; color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
                   }
                 }
-                Text {
+                Text { textFormat: Text.PlainText;
                   text: "◈ PASS filled · FAIL red · hollow unassessed"
                   color: Color.muted
                   font.family: Style.font.family
                   font.pixelSize: Style.font.caption
                 }
-                Text {
+                Text { textFormat: Text.PlainText;
                   text: "zoom " + Math.round(root.graphZoom * 100) + "%"
                   color: Color.muted
                   font.family: Style.font.family
                   font.pixelSize: Style.font.caption
                 }
-                Text {
+                Text { textFormat: Text.PlainText;
                   text: "[reset]"
                   color: Color.accent
                   font.family: Style.font.family
@@ -1134,7 +1137,7 @@ Item {
 
                 Card {
                   SectionTitle { text: root.hasSelection ? "WORLD" : "INSPECTOR" }
-                  Text {
+                  Text { textFormat: Text.PlainText;
                     Layout.fillWidth: true
                     text: root.hasSelection ? root.shortAlias(root.selectedWorld) : "Select a world"
                     color: Color.foreground
@@ -1161,7 +1164,7 @@ Item {
                       tone: Color.muted
                     }
                   }
-                  Text {
+                  Text { textFormat: Text.PlainText;
                     visible: root.hasSelection && (root.selectedWorld.risk !== undefined || root.selectedWorld.complexity !== undefined)
                     text: "derived labels — inputs below"
                     color: Color.muted
@@ -1196,20 +1199,20 @@ Item {
                   RowLayout {
                     Layout.fillWidth: true
                     spacing: Style.spacing.md
-                    Text {
+                    Text { textFormat: Text.PlainText;
                       text: "+" + (root.hasSelection && root.selectedWorld.delta ? Number(root.selectedWorld.delta.added || 0) : 0)
                       color: Color.accent; font.family: Style.font.family; font.pixelSize: Style.font.body; font.bold: true
                     }
-                    Text {
+                    Text { textFormat: Text.PlainText;
                       text: "~" + (root.hasSelection && root.selectedWorld.delta ? Number(root.selectedWorld.delta.modified || 0) : 0)
                       color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.body; font.bold: true
                     }
-                    Text {
+                    Text { textFormat: Text.PlainText;
                       text: "−" + (root.hasSelection && root.selectedWorld.delta ? Number(root.selectedWorld.delta.deleted || 0) : 0)
                       color: Color.urgent; font.family: Style.font.family; font.pixelSize: Style.font.body; font.bold: true
                     }
                     Item { Layout.fillWidth: true }
-                    Text {
+                    Text { textFormat: Text.PlainText;
                       text: root.deltaFiles(root.hasSelection ? root.selectedWorld : null) + " files"
                       color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption
                     }
@@ -1220,7 +1223,7 @@ Item {
                       var fs = root.selectedWorld.delta.files
                       return Array.isArray(fs) ? fs.slice(0, 6) : []
                     }
-                    delegate: Text {
+                    delegate: Text { textFormat: Text.PlainText;
                       required property var modelData
                       Layout.fillWidth: true
                       text: "· " + root.fileLabel(modelData)
@@ -1230,7 +1233,7 @@ Item {
                       elide: Text.ElideLeft
                     }
                   }
-                  Text {
+                  Text { textFormat: Text.PlainText;
                     visible: root.deltaFiles(root.hasSelection ? root.selectedWorld : null) > 6
                     text: "… and " + (root.deltaFiles(root.hasSelection ? root.selectedWorld : null) - 6) + " more"
                     color: Color.muted
@@ -1242,7 +1245,7 @@ Item {
                 Card {
                   visible: root.hasSelection
                   SectionTitle { text: "EVIDENCE" }
-                  Text {
+                  Text { textFormat: Text.PlainText;
                     visible: {
                       if (!root.hasSelection) return false
                       var c = root.selectedWorld.checks
@@ -1263,14 +1266,14 @@ Item {
                       Layout.fillWidth: true
                       spacing: Style.spacing.sm
                       Rectangle { width: Style.space(7); height: width; radius: width / 2; color: root.checkColor(modelData.status) }
-                      Text {
+                      Text { textFormat: Text.PlainText;
                         Layout.fillWidth: true
                         text: String(modelData.name || modelData.kind || "check") + (modelData.required ? "  [required]" : "")
                         color: Color.foreground
                         font.family: Style.font.family; font.pixelSize: Style.font.caption
                         elide: Text.ElideRight
                       }
-                      Text {
+                      Text { textFormat: Text.PlainText;
                         text: String(modelData.status || "?")
                         color: root.checkColor(modelData.status)
                         font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true
@@ -1284,13 +1287,13 @@ Item {
                       Layout.fillWidth: true
                       spacing: Style.spacing.sm
                       Rectangle { width: Style.space(7); height: width; radius: width / 2; color: root.checkColor(modelData.status) }
-                      Text {
+                      Text { textFormat: Text.PlainText;
                         Layout.fillWidth: true
                         text: "formal · " + Number(modelData.total || 0) + " obligations"
                         color: Color.foreground
                         font.family: Style.font.family; font.pixelSize: Style.font.caption
                       }
-                      Text {
+                      Text { textFormat: Text.PlainText;
                         text: String(modelData.status || "?")
                         color: root.checkColor(modelData.status)
                         font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true
@@ -1314,7 +1317,7 @@ Item {
                   }
                   Repeater {
                     model: root.hasSelection && Array.isArray(root.selectedWorld.conflicts) ? root.selectedWorld.conflicts.slice(0, 4) : []
-                    delegate: Text {
+                    delegate: Text { textFormat: Text.PlainText;
                       required property var modelData
                       Layout.fillWidth: true
                       text: "⚠ " + root.fileLabel(modelData)
@@ -1342,7 +1345,7 @@ Item {
                     onClicked: { root.actionKind = "collapse"; root.confirmationStep = 0; root.mode = "collapse" }
                   }
                 }
-                Text {
+                Text { textFormat: Text.PlainText;
                   visible: root.hasSelection && root.selectedWorld.state !== "VALID"
                   Layout.fillWidth: true
                   text: "only VALID worlds can collapse — this one is " + (root.hasSelection ? String(root.selectedWorld.state || "?") : "")
@@ -1374,13 +1377,13 @@ Item {
         RowLayout {
           Layout.fillWidth: true
           spacing: Style.spacing.md
-          Text {
+          Text { textFormat: Text.PlainText;
             text: root.worlds.length + " worlds · " + root.runningJobs() + " jobs running · daemon " + root.daemonAge()
             color: Color.muted
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
           }
-          Text {
+          Text { textFormat: Text.PlainText;
             visible: root.actionError !== ""
             Layout.fillWidth: true
             text: root.actionError
@@ -1390,7 +1393,7 @@ Item {
             elide: Text.ElideRight
           }
           Item { Layout.fillWidth: true; visible: root.actionError === "" }
-          Text {
+          Text { textFormat: Text.PlainText;
             text: "← → lineage · ↑ ↓ siblings · ⏎ collapse · F fork · G graph · esc close"
             color: Color.muted
             font.family: Style.font.family

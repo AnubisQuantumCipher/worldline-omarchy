@@ -21,7 +21,7 @@ Item {
     anchors.fill: parent
     spacing: Style.spacing.md
 
-    Text {
+    Text { textFormat: Text.PlainText;
       Layout.fillWidth: true
       text: root.actionKind === "return"
         ? "RETURN TO " + String(root.world?.alias || "CHECKPOINT")
@@ -45,10 +45,10 @@ Item {
           { label: "Candidate world", value: root.receipt?.candidateWorld || root.world?.id || "—" },
           { label: "Base state", value: root.receipt?.baseState?.state || root.world?.baseRoot || "—" },
           { label: "Candidate delta", value: root.receipt?.candidateDelta?.hash || String(root.world?.delta?.files?.length || 0) + " paths" },
-          { label: "Foreign contamination", value: root.receipt?.foreignWorldContamination?.state || ((root.world?.contamination?.length || 0) === 0 ? "NONE" : "DETECTED") },
+          { label: "Foreign contamination", value: root.receipt?.foreignWorldContamination?.state || "UNEVALUATED — computed at collapse.prepare" },
           { label: "Invariant preservation", value: root.receipt?.invariantPreservation?.state || "PENDING" },
           { label: "Atomic collapse", value: root.receipt?.atomicCollapse?.state || "NOT COMMITTED" },
-          { label: "Conflicts", value: String(root.world?.conflicts?.length || 0) }
+          { label: "Conflicts", value: root.receipt ? String(root.receipt?.conflicts?.length || 0) : "—" }
         ]
 
         delegate: Item {
@@ -56,7 +56,7 @@ Item {
           Layout.fillWidth: true
           implicitHeight: Math.max(labelText.implicitHeight, valueText.implicitHeight)
 
-          Text {
+          Text { textFormat: Text.PlainText;
             id: labelText
             width: parent.width * 0.42
             text: modelData.label
@@ -64,7 +64,7 @@ Item {
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
           }
-          Text {
+          Text { textFormat: Text.PlainText;
             id: valueText
             anchors.right: parent.right
             width: parent.width * 0.56
@@ -85,7 +85,7 @@ Item {
       color: Util.alpha(root.confirmationStep === 0 ? Color.muted : Color.urgent, 0.14)
       radius: Style.cornerRadius
 
-      Text {
+      Text { textFormat: Text.PlainText;
         id: warningText
         anchors.fill: parent
         anchors.margins: Style.spacing.md

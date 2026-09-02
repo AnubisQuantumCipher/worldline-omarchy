@@ -3,6 +3,40 @@
 All notable changes to the WORLDLINE Omarchy plugin are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## [1.1.1] — 2026-09-02
+
+Honest surfaces. Found by an adversarial audit of the plugin against the engine
+it renders; every item was verified against the runtime source.
+
+### Fixed
+- **A world's agent could forge UI chrome on the collapse-authorization screen.**
+  QML `Text` defaults to `AutoText`, so Qt's rich-text heuristic rendered
+  engine-supplied strings — including filenames an in-world agent chooses — as
+  markup, on the exact panel a human reads before approving an irreversible
+  PRIME replacement. Every `Text` element now sets
+  `textFormat: Text.PlainText`. No code execution was possible and no
+  exfiltration channel could be constructed; this was display spoofing.
+- **The review panel affirmed two gates it never evaluated.** "Foreign
+  contamination: NONE" and "Conflicts: 0" fell through to world fields the
+  runtime never writes (they are empty at construction and assigned nowhere);
+  the real values exist only in the transaction record and receipt. Before a
+  collapse they now read `UNEVALUATED — computed at collapse.prepare` and `—`.
+  The gate itself always ran server-side — this was misinformation at the
+  decision point, and it contradicted CONTRIBUTING's "never invent a count, a
+  hash, or a proof state the status file didn't provide".
+- **Delta file lists were unreadable.** The label looked for `path`/`file`, but
+  delta operations carry `pathDisplay`, so the operator saw a left-truncated
+  JSON blob instead of `src/main.py`.
+- **Job failures rendered as `[object Object]`.** Every writer passes a
+  structured error; the JOBS card is the one place the cockpit says why a world
+  died.
+- **A world alias beginning with `-` retargeted `worldline return`.** The
+  command is built as an argv array, so there was no injection, but argparse
+  parsed the alias as an option and `return` then selected PRIME's parent.
+  `return` and `collapse` now pass `--` before the alias.
+- **A check whose status was neither PASS nor FAIL** (e.g. `UNAVAILABLE`) was
+  rounded up to a filled green PASS badge; it now reports `UNASSESSED`.
+
 ## [1.1.0] — 2026-08-29
 
 Mission-control overlay.
