@@ -3,90 +3,72 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "Model.js" as Model
 
+// The bar entry: one globe in the native icon slot, tinted by the active reality's evidence
+// state, plus a small count when agent jobs are running. The full line lives in the tooltip:
+//   ◉ WORLDLINE  <alias> / <agent>  +<files>  EVIDENCE <PASS|FAIL|UNASSESSED|UNAVAILABLE|STALE>
+// Evidence is derived from the world's checks exactly as the cockpit derives it; lifecycle
+// state is reported separately so a running world never reads as "failed".
 BarWidget {
   id: root
   moduleName: "khephri.worldline"
 
-  readonly property var worldlineService: bar?.shell?.firstPartyServiceFor("khephri.worldline")
   property var status: null
   property var lastGoodStatus: null
   property double nowMs: Date.now()
   property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR")
+  property string lastRaw: ""
   readonly property bool motionEnabled: setting("motionEnabled", true) === true
   readonly property bool worldTintEnabled: setting("worldTintEnabled", true) === true
-  readonly property bool stale: {
-    if (!lastGoodStatus || !lastGoodStatus.daemon || !lastGoodStatus.daemon.publishedAt) return true
-    var stamp = Date.parse(lastGoodStatus.daemon.publishedAt)
-    return !isFinite(stamp) || nowMs - stamp > 10000
-  }
+  readonly property string signalState: Model.signal(lastGoodStatus, nowMs)
+  readonly property bool stale: signalState !== "live"
   readonly property bool initialized: lastGoodStatus !== null && lastGoodStatus.prime !== null
   readonly property var activeSummary: findActive()
+  readonly property int runningJobs: lastGoodStatus ? Model.runningJobCount(lastGoodStatus.jobs) : 0
+  readonly property var evidence: Model.evidence(activeSummary, stale)
   readonly property string compactText: {
-    if (!initialized) return "No PRIME — run worldline init /path/to/work"
+    if (signalState === "offline") return "◉ WORLDLINE  no signal — daemon not running (systemctl --user status worldlined)"
+    if (!initialized) return "◉ WORLDLINE  no PRIME — run: worldline init /path/to/work"
     var world = activeSummary
-    var alias = world ? String(world.alias || lastGoodStatus.activeWorld || "PRIME") : String(lastGoodStatus.activeWorld || "PRIME")
-    var agent = world ? String(world.agent || "WORLDLINE") : "WORLDLINE"
-    var delta = world && world.delta ? world.delta : {}
-    var files = Array.isArray(delta.files) ? delta.files.length : Number(delta.files || 0)
-    var proof = proofState(world)
-    return "◉ WORLDLINE  " + alias + " / " + agent + "  +" + files + "  PROOF " + proof
+    var alias = world ? Model.displayAlias(world, lastGoodStatus, "PRIME") : String(lastGoodStatus.activeWorld || "PRIME")
+    var agent = world ? String(world.agent || "worldline") : "worldline"
+    var files = Model.deltaCount(world)
+    var line = "◉ WORLDLINE  " + alias + " / " + agent + "  +" + files + "  EVIDENCE " + evidence.state
+    if (world && world.state) line += "  · " + world.state
+    if (runningJobs > 0) line += "  · " + runningJobs + " job" + (runningJobs === 1 ? "" : "s") + " running"
+    if (stale) line += "  · signal " + signalState
+    return line
   }
   readonly property color stateColor: {
     if (stale || !initialized) return Color.muted
-    var proof = proofState(activeSummary)
-    return proof === "PASS" ? barForeground : (proof === "FAIL" ? Color.urgent : Color.muted)
-  }
-
-  function setting(name, fallback) {
-    var value = settings ? settings[name] : undefined
-    return value === undefined || value === null ? fallback : value
+    if (evidence.state === "PASS") return barForeground
+    if (evidence.state === "FAIL") return Color.urgent
+    return Color.muted
   }
 
   function findActive() {
     if (!lastGoodStatus) return null
     var active = String(lastGoodStatus.activeWorld || "PRIME")
     if (active === "PRIME" && lastGoodStatus.prime) {
-      for (var p = 0; p < lastGoodStatus.worlds.length; p++)
-        if (lastGoodStatus.worlds[p].instanceId === lastGoodStatus.prime.instanceId) return lastGoodStatus.worlds[p]
-      return { alias: "PRIME", agent: "WORLDLINE", delta: { files: [] }, proofs: [] }
+      var prime = Model.worldByInstance(lastGoodStatus.worlds, lastGoodStatus.prime.instanceId)
+      return prime || { alias: "PRIME", agent: "worldline", delta: { files: [] }, checks: [], state: "VALID" }
     }
-    for (var i = 0; i < lastGoodStatus.worlds.length; i++)
-      if (lastGoodStatus.worlds[i].alias === active) return lastGoodStatus.worlds[i]
-    return null
-  }
-
-  function proofState(world) {
-    if (stale) return "STALE"
-    if (!world || !Array.isArray(world.proofs) || world.proofs.length === 0) return "UNASSESSED"
-    for (var i = 0; i < world.proofs.length; i++)
-      if (world.proofs[i].status !== "PASS") return "FAIL"
-    return "PASS"
+    var index = Model.worldIndexByAlias(lastGoodStatus.worlds, active)
+    return index >= 0 ? lastGoodStatus.worlds[index] : null
   }
 
   function applyStatus(raw) {
-    try {
-      var parsed = JSON.parse(String(raw || ""))
-      if (parsed.schemaVersion !== 1 || parsed.activeWorld === undefined || !Array.isArray(parsed.worlds)) return
-      status = parsed
-      lastGoodStatus = parsed
-    } catch (error) {
-      // Atomic replacement plus last-known-good keeps a transient read neutral.
-    }
+    var text = String(raw || "")
+    if (text === lastRaw) return
+    var parsed = Model.parseStatus(text)
+    if (!parsed) return
+    lastRaw = text
+    status = parsed
+    lastGoodStatus = parsed
   }
 
-  function syncServiceSettings() {
-    if (!worldlineService) return
-    worldlineService.motionEnabled = motionEnabled
-    worldlineService.worldTintEnabled = worldTintEnabled
-  }
-
-  onMotionEnabledChanged: syncServiceSettings()
-  onWorldTintEnabledChanged: syncServiceSettings()
-  onWorldlineServiceChanged: syncServiceSettings()
-  Component.onCompleted: syncServiceSettings()
-
-  implicitWidth: button.implicitWidth
+  implicitWidth: button.implicitWidth + (badge.visible ? badge.width + Style.spacing.xxs : 0)
   implicitHeight: button.implicitHeight
 
   FileView {
@@ -99,8 +81,10 @@ BarWidget {
     onFileChanged: statusApplyTimer.restart()
   }
 
+  // Staleness clock every 2 s (no parse unless the bytes changed); the reload catches an
+  // os.replace the watcher missed. Cheaper than the previous 1 s parse-everything loop.
   Timer {
-    interval: 1000
+    interval: 2000
     running: true
     repeat: true
     onTriggered: {
@@ -112,24 +96,49 @@ BarWidget {
 
   Timer {
     id: statusApplyTimer
-    interval: 100
+    interval: 120
     repeat: false
     onTriggered: root.applyStatus(statusFile.text())
   }
 
-  // Rendered exactly like the native bar icons: a globe in the bar's icon slot,
-  // colored by proof state, with the full detail in its hover tooltip.
-  BarIconButton {
-    id: button
+  Row {
     anchors.fill: parent
-    bar: root.bar
-    text: ""   // nf-fa-globe
-    slotSize: Style.bar.iconSlot
-    fontSize: Style.bar.iconFont
-    foreground: root.stateColor
-    tooltipText: root.compactText
-    onPressed: function(buttonCode) {
-      if (root.bar?.shell) root.bar.shell.summon("khephri.worldline", JSON.stringify({ mode: "multiverse" }))
+    spacing: Style.spacing.xxs
+
+    BarIconButton {
+      id: button
+      bar: root.bar
+      text: ""   // nf-fa-globe
+      slotSize: Style.bar.iconSlot
+      fontSize: Style.bar.iconFont
+      foreground: root.stateColor
+      tooltipText: root.compactText
+      onPressed: function(buttonCode) {
+        if (root.bar?.shell) root.bar.shell.summon("khephri.worldline", JSON.stringify({ mode: "multiverse" }))
+      }
+    }
+
+    // Running-job count, drawn in the bar's "active" tone so it reads at a glance.
+    Rectangle {
+      id: badge
+      visible: root.runningJobs > 0 && !root.stale
+      anchors.verticalCenter: parent.verticalCenter
+      width: badgeText.implicitWidth + Style.spacing.sm * 2
+      height: badgeText.implicitHeight + Style.spacing.xxs * 2
+      radius: Style.cornerRadius > 0 ? height / 2 : 0
+      color: Util.alpha(Color.bar.active, 0.18)
+      border.color: Util.alpha(Color.bar.active, 0.7)
+      border.width: 1
+      Text {
+        id: badgeText
+        textFormat: Text.PlainText
+        anchors.centerIn: parent
+        text: String(root.runningJobs)
+        color: Color.bar.active
+        font.family: Style.font.family
+        font.pixelSize: Style.font.caption
+        font.bold: true
+      }
     }
   }
 }

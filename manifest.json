@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "khephri.worldline",
   "name": "WORLDLINE",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "author": "Khephri Labs",
   "license": "MIT",
-  "description": "Branch, inspect, measure, and atomically collapse reconstructable computational realities.",
+  "description": "Mission control for WORLDLINE: propose isolated worlds, run and compare agents, inspect evidence, review and commit one prepared transaction, recover safely.",
   "kinds": [
     "service",
     "overlay",
@@ -19,7 +19,7 @@
   },
   "barWidget": {
     "displayName": "WORLDLINE",
-    "description": "Current reality, agent, delta, evidence state, and multiverse entry point.",
+    "description": "Current reality, agent, delta, evidence state, running jobs, and the multiverse entry point.",
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right",
@@ -31,7 +31,7 @@
       {
         "key": "motionEnabled",
         "type": "boolean",
-        "label": "Collapse motion",
+        "label": "Motion (collapse animation, running pulse)",
         "defaultValue": true
       },
       {

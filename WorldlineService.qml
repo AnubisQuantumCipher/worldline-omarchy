@@ -3,7 +3,11 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
+import "Model.js" as Model
 
+// Headless service: watches the daemon's atomically replaced status.json, raises the
+// "a better future was found" notification for ghost recommendations, and paints the
+// alternate-world tint while a non-PRIME world is the inspected one.
 Item {
   id: root
 
@@ -15,19 +19,17 @@ Item {
   property var lastGoodStatus: null
   property string recommendationId: ""
   property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR")
+  property string lastRaw: ""
 
   function applyStatus(raw) {
-    try {
-      var parsed = JSON.parse(String(raw || ""))
-      if (parsed.schemaVersion !== 1) return
-      var required = ["daemon", "prime", "activeWorld", "worlds", "jobs", "capabilities", "lastReceipt", "ghostRecommendation"]
-      for (var i = 0; i < required.length; i++) if (parsed[required[i]] === undefined) return
-      root.status = parsed
-      root.lastGoodStatus = parsed
-      maybeNotify(parsed.ghostRecommendation)
-    } catch (error) {
-      // Keep the last complete atomic status rather than painting a partial file.
-    }
+    var text = String(raw || "")
+    if (text === root.lastRaw) return
+    var parsed = Model.parseStatus(text)
+    if (!parsed) return    // mid-replacement or foreign file: keep the last complete document
+    root.lastRaw = text
+    root.status = parsed
+    root.lastGoodStatus = parsed
+    maybeNotify(parsed.ghostRecommendation)
   }
 
   function maybeNotify(recommendation) {
@@ -56,19 +58,18 @@ Item {
     onFileChanged: statusApplyTimer.restart()
   }
 
+  // The daemon replaces the file with os.replace, which can drop a QFileSystemWatcher; a slow
+  // reload keeps the tint honest without a per-second parse.
   Timer {
-    interval: 2000
+    interval: 5000
     running: true
     repeat: true
-    onTriggered: {
-      statusFile.reload()
-      statusApplyTimer.restart()
-    }
+    onTriggered: { statusFile.reload(); statusApplyTimer.restart() }
   }
 
   Timer {
     id: statusApplyTimer
-    interval: 100
+    interval: 120
     repeat: false
     onTriggered: root.applyStatus(statusFile.text())
   }

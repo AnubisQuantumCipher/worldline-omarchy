@@ -6,53 +6,89 @@ import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
+import "Model.js" as Model
 
-// WORLDLINE mission control — full-screen cockpit over the live status.json.
-// Everything painted here is read straight from daemon state; derived labels
-// (risk, complexity) are shown next to the inputs that produced them, and
-// UNASSESSED/UNAVAILABLE are rendered as answers, never hidden.
+// WORLDLINE mission control — a full-screen cockpit over the daemon's atomically replaced
+// status.json. Everything painted is read from daemon state or from the JSON a `worldline`
+// command just returned. Derived labels (risk, complexity, evidence) sit next to the inputs
+// that produced them. UNASSESSED, UNAVAILABLE, STALE, and OFFLINE are rendered as answers.
+//
+// Modes: multiverse (graph + rails + inspector) · fork (ForkPanel) · collapse (CollapsePanel,
+// prepare→review→commit) · roots (first-run guidance and managed-root review).
+//
+// Test seam: summon with {"statusPath": "/some/status.json", "fixture": true} to render fixture
+// data. A fixture never executes a consequential command; the banner says so.
 Item {
   id: root
 
   property var shell: ({})
   property var manifest: ({})
-  property var status: ({})
-  property var lastGoodStatus: ({})
   property bool opened: false
   property string mode: "multiverse"
-  property string missionText: ""
-  property int selectedIndex: 0
-  property int confirmationStep: 0
+  property var status: null
+  property string lastRaw: ""
+  property bool statusLoadedOnce: false
+  property double nowMs: Date.now()
+  property int selectedIndex: -1
   property string actionKind: "collapse"
+  property var adapters: []
+  property bool adaptersLoading: false
+  property var doctor: null
+  property bool doctorLoading: false
+  property string doctorError: ""
   property string actionError: ""
-  property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR")
+  property string actionNotice: ""
+  property string lastCommittedReceipt: ""
+  property string primeLabel: "PRIME"
+  property bool fixture: false
+  readonly property string defaultStatusPath: Quickshell.env("XDG_RUNTIME_DIR") + "/worldline/status.json"
+  property string statusPath: defaultStatusPath
+  property string logText: ""
+  property string logWorld: ""
+  property bool logLoading: false
+  property bool showWorldDetails: false
+  property bool showMission: false
+  property bool showCapabilities: false
+  property bool showHelp: false
+  property bool pendingDismiss: false
   property real graphZoom: 1.0
   property real graphPanX: 0
   property real graphPanY: 0
   property real branchScale: 1.0
   property real siblingOpacity: 1.0
-  property string lastCommittedReceipt: ""
-  property bool statusLoadedOnce: false
-  property string primeLabel: "PRIME"
-  property double nowMs: Date.now()
-  property var adapters: []
-  readonly property var serviceObject: shell && typeof shell.serviceFor === "function"
-    ? shell.serviceFor("khephri.worldline") : undefined
-  readonly property bool motionEnabled: serviceObject && serviceObject.motionEnabled !== undefined ? serviceObject.motionEnabled : true
-  readonly property int motionDuration: motionEnabled ? 520 : 0
-  readonly property bool initialized: lastGoodStatus.prime !== undefined && lastGoodStatus.prime !== null
-  readonly property var worlds: Array.isArray(lastGoodStatus.worlds) ? lastGoodStatus.worlds : []
-  readonly property var selectedWorld: worlds.length > 0 ? worlds[Math.max(0, Math.min(selectedIndex, worlds.length - 1))] : ({})
-  readonly property bool hasSelection: selectedWorld && selectedWorld.instanceId !== undefined
-  readonly property var daemonInfo: lastGoodStatus.daemon || ({})
-  readonly property bool stale: {
-    if (!daemonInfo.publishedAt) return true
-    var stamp = Date.parse(daemonInfo.publishedAt)
-    return !isFinite(stamp) || nowMs - stamp > 10000
+  property real pulsePhase: 0
+  property string rootsPath: ""
+  property var rootsDryRun: null
+  property var rootsPendingRemove: null
+  property string rootsError: ""
+  property bool rootsBusy: rootsCall.busy
+  property string rootsConfirmKind: ""
+  property bool rootsConfirmOpen: false
+
+  readonly property var serviceObject: shell && typeof shell.serviceFor === "function" ? shell.serviceFor("khephri.worldline") : null
+  readonly property bool motionEnabled: {
+    if (serviceObject && serviceObject.motionEnabled !== undefined) return serviceObject.motionEnabled === true
+    return Model.widgetSetting(shell ? shell.barConfig : null, "khephri.worldline", "motionEnabled", true) === true
   }
-  readonly property var capabilities: lastGoodStatus.capabilities || ({})
-  readonly property var jobs: Array.isArray(lastGoodStatus.jobs) ? lastGoodStatus.jobs : []
-  readonly property var receipt: lastGoodStatus.lastReceipt || null
+  readonly property int motionDuration: motionEnabled ? 520 : 0
+  readonly property string signalState: Model.signal(status, nowMs)
+  readonly property bool live: signalState === "live" && !fixture
+  readonly property bool initialized: status !== null && status.prime !== null && status.prime !== undefined
+  readonly property var worlds: status && Array.isArray(status.worlds) ? status.worlds : []
+  readonly property var jobs: status && Array.isArray(status.jobs) ? status.jobs : []
+  readonly property var capabilities: status && status.capabilities ? status.capabilities : ({})
+  readonly property var receipt: status && status.lastReceipt ? status.lastReceipt : null
+  readonly property var selectedWorld: selectedIndex >= 0 && selectedIndex < worlds.length ? worlds[selectedIndex] : null
+  readonly property bool hasSelection: selectedWorld !== null && selectedWorld.instanceId !== undefined
+  readonly property int runningJobs: Model.runningJobCount(jobs)
+  readonly property var selectedJob: hasSelection ? Model.activeJob(jobs, selectedWorld.instanceId) : null
+  readonly property var selectedEvidence: Model.evidence(selectedWorld, !live && !fixture)
+  readonly property var comparison: Model.siblingComparison(worlds, selectedWorld)
+  readonly property var integrity: Model.integrityRows(doctor)
+  readonly property var openTransactions: Model.openTransactions(doctor)
+  readonly property bool integrityUrgent: integrity.some(function(row) { return row.urgent }) || openTransactions.length > 0
+  readonly property string stateHome: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state"))
+  readonly property bool editing: (mode === "fork" && forkPanel.editing) || (mode === "roots" && rootsPathField.activeFocus)
 
   // ------------------------------------------------------------ lifecycle
 
@@ -61,237 +97,250 @@ Item {
     try { payload = typeof payloadJson === "string" ? JSON.parse(payloadJson || "{}") : (payloadJson || {}) }
     catch (error) { payload = {} }
     var requested = String(payload.mode || "multiverse")
-    mode = ["fork", "multiverse", "collapse"].indexOf(requested) >= 0 ? requested : "multiverse"
-    opened = true
-    confirmationStep = 0
-    actionError = ""
-    if (payload.select) selectAlias(String(payload.select))
-    if (!adaptersProcess.running) adaptersProcess.running = true
-    Qt.callLater(function() { keyCatcher.forceActiveFocus(); graphCanvas.requestPaint() })
+    root.mode = ["fork", "multiverse", "collapse", "roots"].indexOf(requested) >= 0 ? requested : "multiverse"
+    if (root.mode === "collapse") root.mode = "multiverse"   // collapse is entered from a selection, never cold
+    root.fixture = payload.fixture === true
+    var nextPath = root.fixture && typeof payload.statusPath === "string" && payload.statusPath !== "" ? String(payload.statusPath) : root.defaultStatusPath
+    if (nextPath !== root.statusPath) { root.statusPath = nextPath; root.lastRaw = ""; root.status = null; root.statusLoadedOnce = false }
+    root.opened = true
+    root.actionError = ""
+    root.actionNotice = ""
+    root.pendingDismiss = false
+    root.nowMs = Date.now()
+    statusFile.reload()
+    statusApplyTimer.restart()
+    if (payload.select) Qt.callLater(function() { root.selectAlias(String(payload.select)) })
+    else if (root.selectedIndex < 0) root.selectedIndex = Model.defaultSelection(root.status)
+    if (!root.fixture) { root.refreshAdapters(false); root.refreshDoctor(false) }
+    Qt.callLater(function() {
+      if (root.mode === "fork") forkPanel.focusMission()
+      else keyCatcher.forceActiveFocus()
+      graphCanvas.requestPaint()
+    })
   }
 
   function dismiss() {
-    opened = false
-    confirmationStep = 0
-    if (shell && typeof shell.hide === "function") shell.hide("khephri.worldline")
+    if (root.mode === "collapse" && (collapsePanel.prepared || collapsePanel.phase === "preparing")) {
+      root.pendingDismiss = true
+      collapsePanel.abort()
+      return
+    }
+    finishDismiss()
+  }
+
+  function finishDismiss() {
+    root.pendingDismiss = false
+    root.opened = false
+    root.mode = "multiverse"
+    root.rootsConfirmOpen = false
+    if (root.shell && typeof root.shell.hide === "function") root.shell.hide("khephri.worldline")
   }
 
   function selectAlias(alias) {
-    for (var i = 0; i < worlds.length; i++) {
-      if (worlds[i].alias === alias || worlds[i].instanceId === alias) {
-        selectedIndex = i
-        return
-      }
-    }
+    var index = Model.worldIndexByAlias(root.worlds, alias)
+    if (index >= 0) root.selectedIndex = index
   }
 
   function applyStatus(raw) {
-    try {
-      var parsed = JSON.parse(String(raw || ""))
-      if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.worlds) || parsed.activeWorld === undefined) return
-      status = parsed
-      lastGoodStatus = parsed
-      if (selectedIndex >= worlds.length) selectedIndex = Math.max(0, worlds.length - 1)
-      var rec = parsed.lastReceipt
-      if (rec && rec.receiptId && rec.atomicCollapse
-          && rec.atomicCollapse.state === "COMMITTED") {
-        if (!statusLoadedOnce) {
-          lastCommittedReceipt = rec.receiptId
-          primeLabel = "PRIME′"
-        } else if (rec.receiptId !== lastCommittedReceipt) {
-          lastCommittedReceipt = rec.receiptId
-          primeLabel = "PRIME′"
-          collapseAnimation.restart()
-        }
+    var text = String(raw || "")
+    if (text === root.lastRaw) return
+    var parsed = Model.parseStatus(text)
+    if (!parsed) return
+    root.lastRaw = text
+    root.status = parsed
+    if (root.selectedIndex >= root.worlds.length) root.selectedIndex = Math.max(-1, root.worlds.length - 1)
+    if (root.selectedIndex < 0) root.selectedIndex = Model.defaultSelection(parsed)
+    var rec = parsed.lastReceipt
+    if (rec && rec.receiptId && rec.atomicCollapse && rec.atomicCollapse.state === "COMMITTED") {
+      if (!root.statusLoadedOnce) {
+        root.lastCommittedReceipt = rec.receiptId
+        root.primeLabel = "PRIME′"
+      } else if (rec.receiptId !== root.lastCommittedReceipt) {
+        root.lastCommittedReceipt = rec.receiptId
+        root.primeLabel = "PRIME′"
+        collapseAnimation.restart()
       }
-      statusLoadedOnce = true
-      if (root.opened) graphCanvas.requestPaint()
-    } catch (error) {
-      // Keep the prior complete state while the atomic writer is replaced.
     }
+    root.statusLoadedOnce = true
+    if (root.opened) graphCanvas.requestPaint()
   }
 
-  // ------------------------------------------------------------ lookups
-
-  function worldByInstance(instanceId) {
-    for (var i = 0; i < worlds.length; i++) if (worlds[i].instanceId === instanceId) return worlds[i]
-    return null
+  function refreshAdapters(force) {
+    if (root.fixture) return
+    if (adaptersCall.busy) return
+    root.adaptersLoading = true
+    adaptersCall.run(["worldline", "adapters", "--json"], function(exitCode, stdout, stderr) {
+      root.adaptersLoading = false
+      if (exitCode === 0) {
+        try { var parsed = JSON.parse(stdout); if (Array.isArray(parsed)) root.adapters = parsed } catch (error) { /* keep prior list */ }
+      } else {
+        var failure = Model.parseCliError(stderr, exitCode)
+        root.actionError = "adapters: " + failure.code + ": " + failure.message
+      }
+    })
   }
 
-  function worldById(id) {
-    for (var i = 0; i < worlds.length; i++) if (worlds[i].id === id) return worlds[i]
-    return null
+  function refreshDoctor(reprobe) {
+    if (root.fixture) return
+    if (doctorCall.busy) return
+    root.doctorLoading = true
+    root.doctorError = ""
+    var argv = reprobe ? ["worldline", "doctor", "--refresh", "--json"] : ["worldline", "doctor", "--json"]
+    doctorCall.run(argv, function(exitCode, stdout, stderr) {
+      root.doctorLoading = false
+      if (exitCode === 0) {
+        try { root.doctor = JSON.parse(stdout) } catch (error) { root.doctorError = "doctor returned unreadable JSON" }
+      } else {
+        var failure = Model.parseCliError(stderr, exitCode)
+        root.doctorError = failure.code + ": " + failure.message
+      }
+    })
   }
 
-  function selectedReceipt() {
-    if (!receipt || !hasSelection) return ({})
-    return receipt.candidateWorld === selectedWorld.id ? receipt : ({})
+  function loadLog() {
+    if (!root.hasSelection || logCall.busy) return
+    var instance = String(root.selectedWorld.instanceId)
+    var path = root.stateHome + "/worldline/logs/" + instance + ".agent.stderr"
+    root.logWorld = instance
+    root.logLoading = true
+    logCall.run(["tail", "-n", "60", "--", path], function(exitCode, stdout, stderr) {
+      root.logLoading = false
+      if (exitCode === 0) root.logText = stdout.trim() === "" ? "(agent wrote nothing to stderr)" : stdout
+      else root.logText = "no agent log for this world yet (" + Model.firstLine(stderr) + ")"
+    })
   }
 
-  function displayAlias(world) {
-    if (lastGoodStatus && lastGoodStatus.prime
-        && world.instanceId === lastGoodStatus.prime.instanceId)
-      return primeLabel
-    return String(world.alias)
+  function runAction(argv, label, onDone) {
+    if (root.fixture) { root.actionError = "fixture data — " + label + " is disabled"; return }
+    if (!root.live) { root.actionError = "daemon signal is " + root.signalState + " — " + label + " is disabled"; return }
+    if (actionCall.busy) { root.actionError = "another action is still running"; return }
+    root.actionError = ""
+    root.actionNotice = label + "…"
+    actionCall.run(argv, function(exitCode, stdout, stderr) {
+      if (exitCode === 0) {
+        root.actionNotice = label + " done"
+        if (onDone) onDone(stdout)
+      } else {
+        var failure = Model.parseCliError(stderr, exitCode)
+        root.actionNotice = ""
+        root.actionError = label + ": " + failure.code + ": " + failure.message
+      }
+      keyCatcher.forceActiveFocus()
+    })
   }
 
-  function shortAlias(world) {
-    var a = displayAlias(world)
-    if (a.indexOf("prime-") === 0 && a.length > 16) return "prime-" + a.substring(6, 14)
-    return a
+  function inspectSelected() {
+    if (!root.hasSelection) return
+    var alias = root.selectedWorld.instanceId === (root.status.prime ? root.status.prime.instanceId : "") ? "PRIME" : String(root.selectedWorld.alias)
+    runAction(["worldline", "inspect", "--json", "--", alias], "inspect " + alias)
   }
 
-  function shortHash(h) {
-    if (!h || h === "—") return "—"
-    var s = String(h).replace("sha256:", "")
-    return s.length > 16 ? s.substring(0, 12) + "…" : s
+  function switchSelected() {
+    if (!root.hasSelection || Model.isPrimeGeneration(root.selectedWorld)) return
+    var alias = String(root.selectedWorld.alias)
+    runAction(["worldline", "switch", "--json", "--", alias], "switch to " + alias)
   }
 
-  function stateColor(state) {
-    if (state === "VALID") return Color.accent
-    if (state === "DEGRADED" || state === "DEAD") return Color.urgent
-    if (state === "MUTABLE" || state === "FINALIZING") return Color.foreground
-    return Color.muted   // ARCHIVED / COLLAPSED / unknown
+  function cancelSelected() {
+    if (!root.hasSelection || !Model.isRunning(root.selectedWorld)) return
+    var alias = String(root.selectedWorld.alias)
+    runAction(["worldline", "cancel", "--json", "--", alias], "cancel " + alias)
   }
 
-  function checkColor(s) {
-    if (s === "PASS") return Color.accent
-    if (s === "FAIL") return Color.urgent
-    return Color.muted
+  function cancelJobWorld(instanceId) {
+    var world = Model.worldByInstance(root.worlds, instanceId)
+    if (!world) return
+    runAction(["worldline", "cancel", "--json", "--", String(world.alias)], "cancel " + String(world.alias))
   }
 
-  function riskColor(label) {
-    if (label === "LOW") return Color.accent
-    if (label === "HIGH" || label === "CRITICAL") return Color.urgent
-    return Color.foreground
+  function abortTransaction(transactionId) {
+    runAction(["worldline", "transaction", "abort", "--json", "--", String(transactionId)], "abort " + Model.shortId(transactionId, 8), function() { root.refreshDoctor(false) })
   }
 
-  function proofState(world) {
-    if (!world) return "UNASSESSED"
-    var checks = Array.isArray(world.checks) ? world.checks : []
-    var proofs = Array.isArray(world.proofs) ? world.proofs : []
-    if (checks.length === 0 && proofs.length === 0) return "UNASSESSED"
-    for (var i = 0; i < checks.length; i++) if (checks[i].status === "FAIL") return "FAIL"
-    for (var p = 0; p < proofs.length; p++) if (proofs[p].status !== "PASS") return "FAIL"
-    for (var u = 0; u < checks.length; u++) if (checks[u].status !== "PASS") return "UNASSESSED"
-    return "PASS"
+  function startCollapse(kind) {
+    if (!root.hasSelection) return
+    if (kind === "collapse" && !Model.canCollapse(root.selectedWorld)) { root.actionError = "only a VALID world can collapse — this one is " + String(root.selectedWorld.state); return }
+    if (kind === "return" && !Model.canReturnTo(root.selectedWorld)) { root.actionError = "return needs an ARCHIVED, COLLAPSED, or VALID checkpoint — this one is " + String(root.selectedWorld.state); return }
+    if (!root.live && !root.fixture) { root.actionError = "daemon signal is " + root.signalState + " — review is disabled"; return }
+    root.actionKind = kind
+    root.actionError = ""
+    root.mode = "collapse"
+    collapsePanel.begin()
+    keyCatcher.forceActiveFocus()
   }
 
-  function fmtStamp(iso) {
-    if (!iso) return "—"
-    var t = Date.parse(iso)
-    if (!isFinite(t)) return String(iso)
-    var d = new Date(t)
-    function two(n) { return (n < 10 ? "0" : "") + n }
-    return two(d.getHours()) + ":" + two(d.getMinutes()) + ":" + two(d.getSeconds())
+  // ------------------------------------------------------------ managed roots
+
+  function rootsPreview() {
+    var path = root.rootsPath.trim()
+    if (path === "") { root.rootsError = "enter an absolute directory path"; return }
+    root.rootsError = ""
+    root.rootsDryRun = null
+    var argv = root.initialized ? ["worldline", "root", "add", "--dry-run", "--json", "--", path] : ["worldline", "init", "--dry-run", "--json", "--", path]
+    if (root.fixture) { root.rootsError = "fixture data — dry run disabled"; return }
+    rootsCall.run(argv, function(exitCode, stdout, stderr) {
+      if (exitCode === 0) {
+        try { root.rootsDryRun = JSON.parse(stdout) } catch (error) { root.rootsError = "dry run returned unreadable JSON" }
+      } else {
+        var failure = Model.parseCliError(stderr, exitCode)
+        root.rootsError = failure.code + ": " + failure.message
+      }
+      keyCatcher.forceActiveFocus()
+    })
   }
 
-  function fmtDur(bornIso, endedIso) {
-    var b = Date.parse(bornIso)
-    if (!isFinite(b)) return "—"
-    var e = endedIso ? Date.parse(endedIso) : nowMs
-    if (!isFinite(e)) e = nowMs
-    var s = Math.max(0, Math.round((e - b) / 1000))
-    if (s < 60) return s + "s"
-    if (s < 3600) return Math.floor(s / 60) + "m " + (s % 60) + "s"
-    return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m"
+  function rootsApply() {
+    if (!root.rootsDryRun || !root.live) return
+    var path = root.rootsPath.trim()
+    var argv = root.initialized ? ["worldline", "root", "add", "--yes", "--json", "--", path] : ["worldline", "init", "--yes", "--json", "--", path]
+    root.rootsConfirmOpen = false
+    rootsCall.run(argv, function(exitCode, stdout, stderr) {
+      if (exitCode === 0) {
+        root.rootsDryRun = null
+        root.rootsPath = ""
+        root.actionNotice = "registered " + path
+        root.refreshDoctor(false)
+      } else {
+        var failure = Model.parseCliError(stderr, exitCode)
+        root.rootsError = failure.code + ": " + failure.message
+      }
+      keyCatcher.forceActiveFocus()
+    })
   }
 
-  function daemonAge() {
-    if (!daemonInfo.publishedAt) return "no signal"
-    var t = Date.parse(daemonInfo.publishedAt)
-    if (!isFinite(t)) return "no signal"
-    var s = Math.max(0, Math.round((nowMs - t) / 1000))
-    return s + "s ago"
+  function rootsPreviewRemove(path) {
+    if (root.fixture) { root.rootsError = "fixture data — dry run disabled"; return }
+    root.rootsError = ""
+    root.rootsPendingRemove = null
+    rootsCall.run(["worldline", "root", "remove", "--dry-run", "--json", "--", String(path)], function(exitCode, stdout, stderr) {
+      if (exitCode === 0) {
+        try { root.rootsPendingRemove = JSON.parse(stdout) } catch (error) { root.rootsError = "dry run returned unreadable JSON" }
+      } else {
+        var failure = Model.parseCliError(stderr, exitCode)
+        root.rootsError = failure.code + ": " + failure.message
+      }
+      keyCatcher.forceActiveFocus()
+    })
   }
 
-  readonly property var stateOrder: ["VALID", "MUTABLE", "FINALIZING", "DEGRADED", "DEAD", "ARCHIVED", "COLLAPSED"]
-
-  function stateCounts() {
-    var counts = ({})
-    for (var i = 0; i < worlds.length; i++) {
-      var s = String(worlds[i].state || "?")
-      counts[s] = (counts[s] || 0) + 1
-    }
-    var out = []
-    for (var j = 0; j < stateOrder.length; j++)
-      if (counts[stateOrder[j]]) out.push({ state: stateOrder[j], count: counts[stateOrder[j]] })
-    return out
+  function rootsApplyRemove() {
+    if (!root.rootsPendingRemove || !root.live) return
+    var path = String(root.rootsPendingRemove.roots[0].path)
+    root.rootsConfirmOpen = false
+    rootsCall.run(["worldline", "root", "remove", "--yes", "--json", "--", path], function(exitCode, stdout, stderr) {
+      if (exitCode === 0) {
+        root.rootsPendingRemove = null
+        root.actionNotice = "removed " + path + " (directory materialized back in place)"
+        root.refreshDoctor(false)
+      } else {
+        var failure = Model.parseCliError(stderr, exitCode)
+        root.rootsError = failure.code + ": " + failure.message
+      }
+      keyCatcher.forceActiveFocus()
+    })
   }
 
-  function recentJobs() {
-    var sorted = jobs.slice()
-    sorted.sort(function(a, b) { return String(b.started || "").localeCompare(String(a.started || "")) })
-    var out = []
-    for (var i = 0; i < Math.min(5, sorted.length); i++) {
-      var j = sorted[i]
-      var w = worldByInstance(j.world)
-      out.push({
-        state: String(j.state || "?"),
-        alias: w ? shortAlias(w) : String(j.world || "").substring(0, 8),
-        dur: fmtDur(j.started, j.ended),
-        error: j.error ? String(typeof j.error === "object"
-          ? (j.error.message || j.error.code || JSON.stringify(j.error))
-          : j.error) : ""
-      })
-    }
-    return out
-  }
-
-  function runningJobs() {
-    var n = 0
-    for (var i = 0; i < jobs.length; i++)
-      if (jobs[i].state === "RUNNING" || jobs[i].state === "PENDING") n++
-    return n
-  }
-
-  readonly property var capOrder: ["atomicExchange", "overlay", "namespaces", "cgroups",
-                                   "systemd", "git", "docker", "inotify", "hyprland",
-                                   "btrfs", "criu", "systemRootCollapse"]
-
-  function capRows() {
-    var out = []
-    for (var i = 0; i < capOrder.length; i++) {
-      var k = capOrder[i]
-      var c = capabilities[k]
-      if (!c || typeof c !== "object") continue
-      out.push({
-        name: k,
-        ok: c.state === "AVAILABLE",
-        note: c.state === "AVAILABLE"
-          ? String(c.version || c.backend || c.mechanism || c.serverVersion || "")
-          : String(c.reason || "unavailable")
-      })
-    }
-    return out
-  }
-
-  function availableAgents() {
-    var preferred = ["codex", "claude", "omp"]
-    if (adapters.length === 0) return preferred   // probe not back yet
-    var avail = []
-    for (var i = 0; i < adapters.length; i++)
-      if (adapters[i].state === "AVAILABLE") avail.push(String(adapters[i].name))
-    var pick = []
-    for (var p = 0; p < preferred.length; p++)
-      if (avail.indexOf(preferred[p]) >= 0) pick.push(preferred[p])
-    for (var a = 0; a < avail.length && pick.length < 3; a++)
-      if (pick.indexOf(avail[a]) < 0) pick.push(avail[a])
-    return pick
-  }
-
-  function deltaFiles(world) {
-    var d = world && world.delta ? world.delta : ({})
-    return Array.isArray(d.files) ? d.files.length : Number(d.files || 0)
-  }
-
-  function fileLabel(f) {
-    if (typeof f === "string") return f
-    if (f && typeof f === "object") return String(f.pathDisplay || f.path || f.file || JSON.stringify(f))
-    return String(f)
-  }
-
-  // ------------------------------------------------------------ tree nav
+  // ------------------------------------------------------------ tree navigation
 
   function parentIndex(index) {
     if (index < 0 || index >= worlds.length) return index
@@ -316,84 +365,58 @@ Item {
     return siblings[(position + delta + siblings.length) % siblings.length]
   }
 
-  // ------------------------------------------------------------ actions
-
-  function runRace() {
-    if (!initialized || missionText.trim() === "" || actionProcess.running) return
-    var agents = availableAgents()
-    if (agents.length < 3) { actionError = "race needs three AVAILABLE adapters — found " + agents.length; return }
-    actionError = ""
-    actionProcess.command = [
-      "worldline", "race", "--detach", "--mission-text", missionText,
-      "--agent", agents[0], "--agent", agents[1], "--agent", agents[2]
-    ]
-    actionProcess.running = true
-  }
-
-  function executeSelection() {
-    if (!hasSelection || actionProcess.running) return
-    actionError = ""
-    if (actionKind === "return")
-      actionProcess.command = ["worldline", "return", "--yes", "--", selectedWorld.alias]
-    else
-      actionProcess.command = ["worldline", "collapse", "--yes", "--", selectedWorld.alias]
-    actionProcess.running = true
+  function toneColor(tone) {
+    return tone === "accent" ? Color.accent : tone === "urgent" ? Color.urgent : tone === "foreground" ? Color.foreground : Color.muted
   }
 
   // ------------------------------------------------------------ plumbing
 
+  WlCall { id: adaptersCall }
+  WlCall { id: doctorCall }
+  WlCall { id: actionCall }
+  WlCall { id: logCall }
+  WlCall { id: rootsCall }
+
   FileView {
     id: statusFile
-    path: root.runtimeDir + "/worldline/status.json"
+    path: root.statusPath
     watchChanges: true
     atomicWrites: true
     printErrors: false
     onLoaded: root.applyStatus(text())
     onFileChanged: statusApplyTimer.restart()
+    onLoadFailed: { if (root.fixture) root.actionError = "fixture status file could not be read: " + root.statusPath }
   }
 
+  // While open: tick the clock every second (staleness, lifetimes) and reload at 2 s so an
+  // os.replace the watcher missed is still caught. Nothing runs while the cockpit is closed.
   Timer {
     interval: 1000
     running: root.opened
     repeat: true
+    property int ticks: 0
     onTriggered: {
       root.nowMs = Date.now()
-      statusFile.reload()
-      statusApplyTimer.restart()
+      ticks += 1
+      if (ticks % 2 === 0) { statusFile.reload(); statusApplyTimer.restart() }
+      if (ticks % 15 === 0 && root.diagnosticsAuto) root.refreshDoctor(false)
     }
   }
+  property bool diagnosticsAuto: true
 
   Timer {
     id: statusApplyTimer
-    interval: 100
+    interval: 120
     repeat: false
     onTriggered: root.applyStatus(statusFile.text())
   }
 
-  Process {
-    id: adaptersProcess
-    running: false
-    command: ["worldline", "adapters", "--json"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        try {
-          var parsed = JSON.parse(String(text || "[]"))
-          if (Array.isArray(parsed)) root.adapters = parsed
-        } catch (error) { /* keep prior list */ }
-      }
-    }
-  }
-
-  Process {
-    id: actionProcess
-    running: false
-    stdout: StdioCollector { waitForEnd: true }
-    stderr: StdioCollector { id: actionStderr; waitForEnd: true }
-    onExited: function(exitCode) {
-      if (exitCode !== 0) root.actionError = String(actionStderr.text || "WORLDLINE action failed").trim()
-      else if (root.mode === "fork") root.mode = "multiverse"
-    }
+  // Running-world pulse: only when motion is enabled and something is actually running.
+  Timer {
+    interval: 90
+    running: root.opened && root.motionEnabled && root.runningJobs > 0 && root.mode === "multiverse"
+    repeat: true
+    onTriggered: { root.pulsePhase = (root.pulsePhase + 0.045) % 1; graphCanvas.requestPaint() }
   }
 
   SequentialAnimation {
@@ -409,70 +432,8 @@ Item {
 
   onBranchScaleChanged: if (root.opened) graphCanvas.requestPaint()
   onSiblingOpacityChanged: if (root.opened) graphCanvas.requestPaint()
-  onSelectedIndexChanged: if (root.opened) graphCanvas.requestPaint()
-
-  // ------------------------------------------------------------ reusable bits
-
-  component SectionTitle: Text { textFormat: Text.PlainText;
-    color: Color.muted
-    font.family: Style.font.family
-    font.pixelSize: Style.font.caption
-    font.bold: true
-    font.letterSpacing: Style.space(0.8)
-  }
-
-  component Card: Rectangle {
-    default property alias content: inner.data
-    Layout.fillWidth: true
-    implicitHeight: inner.implicitHeight + Style.spacing.md * 2
-    color: Util.alpha(Color.foreground, 0.03)
-    border.color: Util.alpha(Color.muted, 0.45)
-    border.width: 1
-    radius: Style.cornerRadius
-    ColumnLayout {
-      id: inner
-      anchors.fill: parent
-      anchors.margins: Style.spacing.md
-      spacing: Style.spacing.xs
-    }
-  }
-
-  component KV: RowLayout {
-    property string k: ""
-    property string v: ""
-    property color vColor: Color.foreground
-    Layout.fillWidth: true
-    spacing: Style.spacing.sm
-    Text { textFormat: Text.PlainText; text: parent.k; color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
-    Item { Layout.fillWidth: true }
-    Text { textFormat: Text.PlainText;
-      Layout.maximumWidth: Style.space(200)
-      text: parent.v; color: parent.vColor
-      font.family: Style.font.family; font.pixelSize: Style.font.caption
-      elide: Text.ElideMiddle
-      horizontalAlignment: Text.AlignRight
-    }
-  }
-
-  component StateChip: Rectangle {
-    property string label: ""
-    property color tone: Color.muted
-    implicitWidth: chipText.implicitWidth + Style.spacing.md * 2
-    implicitHeight: chipText.implicitHeight + Style.spacing.xs * 2
-    radius: height / 2
-    color: Util.alpha(tone, 0.14)
-    border.color: Util.alpha(tone, 0.6)
-    border.width: 1
-    Text { textFormat: Text.PlainText;
-      id: chipText
-      anchors.centerIn: parent
-      text: parent.label
-      color: parent.tone
-      font.family: Style.font.family
-      font.pixelSize: Style.font.caption
-      font.bold: true
-    }
-  }
+  onSelectedIndexChanged: { if (root.opened) graphCanvas.requestPaint(); root.logText = ""; root.logWorld = "" }
+  onModeChanged: if (root.mode !== "fork") Qt.callLater(function() { keyCatcher.forceActiveFocus() })
 
   // ------------------------------------------------------------ the cockpit
 
@@ -486,28 +447,49 @@ Item {
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
 
+    readonly property int railWidth: Math.round(Math.max(Style.space(220), Math.min(Style.space(330), width * 0.24)))
+    readonly property int inspectorWidth: Math.round(Math.max(Style.space(240), Math.min(Style.space(360), width * 0.26)))
+    readonly property bool compact: width < Style.space(1100)
+
     Item {
       id: keyCatcher
       anchors.fill: parent
       focus: true
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Escape) {
-          root.dismiss(); event.accepted = true
-        } else if (event.key === Qt.Key_F && root.mode === "multiverse") {
-          root.mode = "fork"; event.accepted = true
-        } else if (event.key === Qt.Key_G && root.mode !== "collapse") {
-          root.mode = "multiverse"; event.accepted = true
-        } else if (root.mode === "multiverse" && event.key === Qt.Key_Left) {
-          root.selectedIndex = root.parentIndex(root.selectedIndex); event.accepted = true
-        } else if (root.mode === "multiverse" && event.key === Qt.Key_Right) {
-          root.selectedIndex = root.childIndex(root.selectedIndex); event.accepted = true
-        } else if (root.mode === "multiverse" && event.key === Qt.Key_Up) {
-          root.selectedIndex = root.siblingIndex(root.selectedIndex, -1); event.accepted = true
-        } else if (root.mode === "multiverse" && event.key === Qt.Key_Down) {
-          root.selectedIndex = root.siblingIndex(root.selectedIndex, 1); event.accepted = true
-        } else if (root.mode === "multiverse" && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
-          root.mode = "collapse"; root.actionKind = "collapse"; root.confirmationStep = 0; event.accepted = true
+        if (root.rootsConfirmOpen) { if (rootsConfirm.handleKey(event)) event.accepted = true; return }
+        if (root.mode === "collapse") { if (collapsePanel.handleKey(event)) event.accepted = true; return }
+        if (root.mode === "fork") { if (forkPanel.handleKey(event)) event.accepted = true; return }
+        if (root.mode === "roots") {
+          if (rootsPathField.activeFocus) {
+            if (event.key === Qt.Key_Escape) { keyCatcher.forceActiveFocus(); event.accepted = true }
+            else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { root.rootsPreview(); event.accepted = true }
+            return
+          }
+          if (event.key === Qt.Key_Escape) { root.mode = "multiverse"; event.accepted = true }
+          return
+        }
+        // multiverse mode
+        if (event.key === Qt.Key_Escape) { if (root.showHelp) root.showHelp = false; else root.dismiss(); event.accepted = true; return }
+        if (event.text === "?" || event.key === Qt.Key_F1) { root.showHelp = !root.showHelp; event.accepted = true; return }
+        if (event.key === Qt.Key_F || event.text === "f") { root.mode = "fork"; Qt.callLater(forkPanel.focusMission); event.accepted = true; return }
+        if (event.text === "d" || event.text === "D") { root.refreshDoctor(true); event.accepted = true; return }
+        if (event.text === "l" || event.text === "L") { root.loadLog(); event.accepted = true; return }
+        if (event.text === "c" || event.text === "C") { root.startCollapse("collapse"); event.accepted = true; return }
+        if (event.text === "r" || event.text === "R") { root.startCollapse("return"); event.accepted = true; return }
+        if (event.text === "x" || event.text === "X") { root.cancelSelected(); event.accepted = true; return }
+        if (event.text === "i" || event.text === "I") { root.inspectSelected(); event.accepted = true; return }
+        if (event.text === "s" || event.text === "S") { root.switchSelected(); event.accepted = true; return }
+        if (event.text === "m" || event.text === "M") { root.mode = "roots"; event.accepted = true; return }
+        if (event.text === "0") { root.graphZoom = 1; root.graphPanX = 0; root.graphPanY = 0; graphCanvas.requestPaint(); event.accepted = true; return }
+        if (event.key === Qt.Key_Left || event.text === "h") { root.selectedIndex = root.parentIndex(root.selectedIndex); event.accepted = true; return }
+        if (event.key === Qt.Key_Right || event.text === "l") { root.selectedIndex = root.childIndex(root.selectedIndex); event.accepted = true; return }
+        if (event.key === Qt.Key_Up || event.text === "k") { root.selectedIndex = root.siblingIndex(root.selectedIndex, -1); event.accepted = true; return }
+        if (event.key === Qt.Key_Down || event.text === "j") { root.selectedIndex = root.siblingIndex(root.selectedIndex, 1); event.accepted = true; return }
+        if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+          if (root.hasSelection && Model.canCollapse(root.selectedWorld)) root.startCollapse("collapse")
+          else root.inspectSelected()
+          event.accepted = true
         }
       }
     }
@@ -525,134 +507,367 @@ Item {
         RowLayout {
           Layout.fillWidth: true
           spacing: Style.spacing.md
-          Text { textFormat: Text.PlainText;
-            text: "W O R L D L I N E"
-            color: Color.foreground
-            font.family: Style.font.family
-            font.pixelSize: Style.font.display
-            font.bold: true
-            font.letterSpacing: Style.space(1)
-          }
-          Text { textFormat: Text.PlainText;
-            text: "MISSION CONTROL"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            font.letterSpacing: Style.space(1.2)
+          ColumnLayout {
+            spacing: 0
+            Text {
+              textFormat: Text.PlainText
+              text: "W O R L D L I N E"
+              color: Color.foreground
+              font.family: Style.font.family
+              font.pixelSize: Style.font.display
+              font.bold: true
+              font.letterSpacing: Style.spaceReal(1)
+            }
+            Text {
+              textFormat: Text.PlainText
+              text: "MISSION CONTROL · a world is a proposal, PRIME is the only reality"
+              color: Color.muted
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              font.letterSpacing: Style.spaceReal(1.0)
+            }
           }
           Item { Layout.fillWidth: true }
-          StateChip {
-            label: root.stale ? "DAEMON STALE · " + root.daemonAge()
-                              : "DAEMON " + String(root.daemonInfo.state || "?") + " · v" + String(root.daemonInfo.version || "?")
-            tone: root.stale ? Color.urgent : Color.accent
+          Flow {
+            Layout.maximumWidth: panel.width * 0.6
+            spacing: Style.spacing.sm
+            layoutDirection: Qt.RightToLeft
+            WlChip {
+              label: root.fixture ? "FIXTURE DATA" : (root.signalState === "live" ? "SIGNAL LIVE · v" + String(root.status.daemon.version || "?") : root.signalState === "stale" ? "SIGNAL STALE · " + Model.fmtAge(Model.daemonAgeMs(root.status, root.nowMs)) : "NO SIGNAL")
+              glyph: root.fixture ? "⚗" : root.signalState === "live" ? "●" : root.signalState === "stale" ? "◐" : "○"
+              tone: root.fixture ? "foreground" : root.signalState === "live" ? "accent" : "urgent"
+              filled: root.signalState !== "live"
+            }
+            WlChip {
+              label: root.initialized ? root.primeLabel + (root.status.prime.dirty ? " · DIRTY" : "") : "NO PRIME"
+              glyph: root.initialized ? "◎" : "!"
+              tone: root.initialized ? (root.status.prime.dirty ? "urgent" : "accent") : "urgent"
+            }
+            WlChip {
+              visible: root.initialized
+              label: "ACTIVE " + String(root.status ? root.status.activeWorld || "PRIME" : "PRIME")
+              tone: String(root.status ? root.status.activeWorld || "PRIME" : "PRIME") === "PRIME" ? "foreground" : "accent"
+            }
+            WlChip {
+              visible: root.runningJobs > 0
+              label: root.runningJobs + " RUNNING"
+              glyph: "▶"
+              tone: "accent"
+              filled: true
+            }
+            WlChip {
+              visible: root.integrityUrgent
+              label: "DIAGNOSTICS"
+              glyph: "⚠"
+              tone: "urgent"
+              filled: true
+            }
           }
-          StateChip {
-            label: root.initialized ? root.primeLabel + (root.lastGoodStatus.prime.dirty ? " · DIRTY" : "")
-                                    : "NO PRIME"
-            tone: root.initialized ? (root.lastGoodStatus.prime.dirty ? Color.urgent : Color.accent) : Color.urgent
-          }
-          StateChip {
-            label: "ACTIVE " + String(root.lastGoodStatus.activeWorld || "PRIME")
-            tone: String(root.lastGoodStatus.activeWorld || "PRIME") === "PRIME" ? Color.foreground : Color.accent
-          }
-          StateChip {
-            label: "BACKEND " + String(root.capabilities.selectedBackend || "?")
-            tone: Color.muted
-          }
-          Button { text: "×"; onClicked: root.dismiss() }
+          Button { text: "Fork (F)"; bordered: true; enabled: root.mode !== "collapse"; onClicked: { root.mode = "fork"; Qt.callLater(forkPanel.focusMission) } }
+          Button { text: "Roots (M)"; bordered: true; enabled: root.mode !== "collapse"; onClicked: root.mode = "roots" }
+          Button { text: "?"; bordered: true; onClicked: root.showHelp = !root.showHelp }
+          Button { text: "×"; bordered: true; onClicked: root.dismiss() }
         }
 
         Rectangle { Layout.fillWidth: true; height: 1; color: Util.alpha(Color.muted, 0.5) }
+
+        // fixture banner
+        Rectangle {
+          Layout.fillWidth: true
+          visible: root.fixture
+          implicitHeight: fixtureText.implicitHeight + Style.spacing.md
+          color: Util.alpha(Color.urgent, 0.10)
+          border.color: Util.alpha(Color.urgent, 0.5)
+          border.width: 1
+          radius: Style.cornerRadius
+          Text {
+            id: fixtureText
+            textFormat: Text.PlainText
+            anchors.fill: parent
+            anchors.margins: Style.spacing.sm
+            text: "FIXTURE DATA from " + root.statusPath + " — nothing here is live and every consequential action is disabled."
+            color: Color.urgent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideMiddle
+          }
+        }
 
         // ---------------------------------------------------- body
         Item {
           Layout.fillWidth: true
           Layout.fillHeight: true
 
-          // ============ FORK MODE ============
-          ColumnLayout {
+          // ============ FORK ============
+          ForkPanel {
+            id: forkPanel
             anchors.fill: parent
             visible: root.mode === "fork"
-            spacing: Style.spacing.lg
-
-            Text { textFormat: Text.PlainText;
-              Layout.alignment: Qt.AlignHCenter
-              text: root.initialized ? "●  FORK FROM " + root.primeLabel : "No PRIME — run worldline init /path/to/work"
-              color: root.initialized ? Color.accent : Color.urgent
-              font.family: Style.font.family
-              font.pixelSize: Style.font.display
-              font.bold: true
+            adapters: root.adapters
+            adaptersLoading: root.adaptersLoading
+            worlds: root.worlds
+            initialized: root.initialized
+            signalState: root.signalState
+            fixture: root.fixture
+            primeLabel: root.primeLabel
+            onBack: root.mode = "multiverse"
+            onRequestFocus: keyCatcher.forceActiveFocus()
+            onRefreshAdapters: root.refreshAdapters(true)
+            onLaunched: function(summary) {
+              root.mode = "multiverse"
+              root.actionNotice = summary.race ? "race launched: " + summary.aliases.join(" · ") : "fork launched: " + summary.aliases.join("")
+              Qt.callLater(function() { statusFile.reload(); statusApplyTimer.restart() })
+              if (summary.aliases.length > 0) Qt.callLater(function() { root.selectAlias(summary.aliases[0]) })
             }
+          }
 
-            RowLayout {
-              Layout.alignment: Qt.AlignHCenter
-              spacing: Style.spacing.xl
-              Repeater {
-                model: root.availableAgents()
-                delegate: ColumnLayout {
-                  required property var modelData
-                  required property int index
-                  spacing: Style.spacing.sm
-                  Text { textFormat: Text.PlainText;
-                    Layout.alignment: Qt.AlignHCenter
-                    text: "WORLD " + ["α", "β", "γ"][index]
-                    color: Color.foreground
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.title
-                    font.bold: true
-                  }
-                  Text { textFormat: Text.PlainText;
-                    Layout.alignment: Qt.AlignHCenter
-                    text: String(modelData).toUpperCase()
-                    color: Color.accent
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.caption
-                    font.letterSpacing: Style.space(0.5)
-                  }
-                }
+          // ============ COLLAPSE / RETURN ============
+          CollapsePanel {
+            id: collapsePanel
+            anchors.fill: parent
+            visible: root.mode === "collapse"
+            world: root.selectedWorld || ({})
+            status: root.status || ({})
+            actionKind: root.actionKind
+            signalState: root.signalState
+            fixture: root.fixture
+            primeLabel: root.primeLabel
+            onRequestFocus: keyCatcher.forceActiveFocus()
+            onCancelled: {
+              if (root.pendingDismiss) { root.finishDismiss(); return }
+              root.mode = "multiverse"
+              root.refreshDoctor(false)
+            }
+            onCommitted: function(result) {
+              root.actionNotice = "committed · receipt " + (result && result.receipt ? Model.shortHash(result.receipt.receiptId) : "")
+              statusFile.reload(); statusApplyTimer.restart()
+              root.refreshDoctor(false)
+            }
+          }
+
+          // ============ ROOTS ============
+          Flickable {
+            anchors.fill: parent
+            visible: root.mode === "roots"
+            contentHeight: rootsColumn.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            ColumnLayout {
+              id: rootsColumn
+              width: parent.width
+              spacing: Style.spacing.md
+
+              Text {
+                textFormat: Text.PlainText
+                text: root.initialized ? "MANAGED ROOTS" : "FIRST RUN — REGISTER A ROOT"
+                color: Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.heading
+                font.bold: true
+                font.letterSpacing: Style.spaceReal(0.6)
               }
-            }
-
-            TextArea {
-              id: missionEditor
-              Layout.fillWidth: true
-              Layout.fillHeight: true
-              enabled: root.initialized
-              placeholderText: "Describe one mission. Each agent receives the same frozen reality."
-              text: root.missionText
-              onTextChanged: root.missionText = text
-              color: Color.foreground
-              placeholderTextColor: Color.muted
-              font.family: Style.font.family
-              font.pixelSize: Style.font.body
-              wrapMode: TextEdit.Wrap
-              background: Rectangle {
-                color: Util.alpha(Color.foreground, 0.035)
-                border.color: missionEditor.activeFocus ? Color.accent : Util.alpha(Color.muted, 0.5)
-                border.width: 1
-                radius: Style.cornerRadius
-              }
-            }
-            RowLayout {
-              Layout.fillWidth: true
-              Text { textFormat: Text.PlainText;
+              Text {
+                textFormat: Text.PlainText
                 Layout.fillWidth: true
-                text: "A race runs three agents concurrently — roughly triple the model spend of a single fork."
+                text: "WORLDLINE captures the directories you nominate (that capture is PRIME), forks them into isolated worlds, and commits exactly one world back through a single atomic exchange the proved kernel authorized. Registration MOVES the directory into the managed store and leaves a symlink at the exact same path, so every tool keeps working; removal materializes the current bytes back in place. Both steps show a dry run first and require an explicit confirmation."
                 color: Color.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
                 wrapMode: Text.WordWrap
               }
-              Button { text: "BACK"; onClicked: root.mode = "multiverse" }
-              Button {
-                text: "FORK REALITY"
-                enabled: root.initialized && root.missionText.trim() !== "" && !actionProcess.running
-                onClicked: root.runRace()
+
+              WlCard {
+                title: "REGISTERED — " + (root.initialized ? root.status.prime.roots.length : 0)
+                urgent: root.doctor && root.doctor.rootIntegrity && root.doctor.rootIntegrity.state !== "OK"
+                Text {
+                  textFormat: Text.PlainText
+                  visible: !root.initialized
+                  Layout.fillWidth: true
+                  text: "Nothing is registered. The daemon is running and owns no directory — that is the healthy uninitialized state, not a fault."
+                  color: Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
+                Repeater {
+                  model: root.initialized && Array.isArray(root.status.prime.roots) ? root.status.prime.roots : []
+                  delegate: RowLayout {
+                    id: rootRow
+                    required property var modelData
+                    readonly property var integrityEntry: {
+                      if (!root.doctor || !root.doctor.rootIntegrity) return null
+                      var rows = root.doctor.rootIntegrity.roots || []
+                      for (var i = 0; i < rows.length; i++) if (rows[i].rootKey === modelData.rootKey) return rows[i]
+                      return null
+                    }
+                    Layout.fillWidth: true
+                    spacing: Style.spacing.sm
+                    Text { textFormat: Text.PlainText; text: modelData.primary ? "★" : "·"; color: Color.accent; font.family: Style.font.family; font.pixelSize: Style.font.body }
+                    ColumnLayout {
+                      Layout.fillWidth: true
+                      spacing: 0
+                      Text { textFormat: Text.PlainText; Layout.fillWidth: true; text: String(modelData.path || ""); color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.body; elide: Text.ElideLeft }
+                      Text {
+                        textFormat: Text.PlainText
+                        Layout.fillWidth: true
+                        text: String(modelData.kind || "") + (modelData.primary ? " · primary (agents run here, .worldline.json read here)" : "") + "  ·  key " + Model.shortId(modelData.rootKey, 12) + "  ·  manifest " + Model.shortHash(modelData.manifestRoot)
+                        color: Color.muted
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideRight
+                      }
+                    }
+                    WlChip {
+                      label: rootRow.integrityEntry ? String(rootRow.integrityEntry.state) : (root.doctorLoading ? "PROBING" : "UNASSESSED")
+                      glyph: rootRow.integrityEntry && rootRow.integrityEntry.state === "OK" ? "✓" : "○"
+                      tone: rootRow.integrityEntry ? (rootRow.integrityEntry.state === "OK" ? "accent" : "urgent") : "muted"
+                      tooltipText: rootRow.integrityEntry && rootRow.integrityEntry.reason ? String(rootRow.integrityEntry.reason) : ""
+                    }
+                    Button {
+                      text: "Remove…"
+                      fontSize: Style.font.caption
+                      enabled: root.live && !root.rootsBusy
+                      onClicked: root.rootsPreviewRemove(String(modelData.path))
+                    }
+                  }
+                }
               }
+
+              WlCard {
+                visible: root.rootsPendingRemove !== null
+                urgent: true
+                title: "REMOVE — DRY RUN"
+                Text {
+                  textFormat: Text.PlainText
+                  Layout.fillWidth: true
+                  text: root.rootsPendingRemove ? String(root.rootsPendingRemove.effect || "") : ""
+                  color: Color.foreground
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.body
+                  wrapMode: Text.WordWrap
+                }
+                Repeater {
+                  model: root.rootsPendingRemove ? root.rootsPendingRemove.roots : []
+                  delegate: Text { required property var modelData; textFormat: Text.PlainText; Layout.fillWidth: true; text: "  " + String(modelData.path) + "  [" + String(modelData.kind) + "]"; color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.caption; elide: Text.ElideLeft }
+                }
+                RowLayout {
+                  Layout.fillWidth: true
+                  Item { Layout.fillWidth: true }
+                  Button { text: "Keep"; bordered: true; onClicked: root.rootsPendingRemove = null }
+                  Button {
+                    text: "Remove this root"
+                    bordered: true
+                    enabled: root.live && !root.rootsBusy
+                    onClicked: { root.rootsConfirmKind = "remove"; root.rootsConfirmOpen = true }
+                  }
+                }
+              }
+
+              WlCard {
+                title: root.initialized ? "ADD A ROOT" : "REGISTER THE FIRST ROOT"
+                RowLayout {
+                  Layout.fillWidth: true
+                  spacing: Style.spacing.sm
+                  TextField {
+                    id: rootsPathField
+                    Layout.fillWidth: true
+                    placeholderText: "/home/you/Projects/your-project   (absolute path, a real directory, not a symlink)"
+                    text: root.rootsPath
+                    onTextEdited: { root.rootsPath = text; root.rootsDryRun = null }
+                    enabled: !root.fixture
+                  }
+                  Button {
+                    text: root.rootsBusy ? "…" : "Dry run"
+                    bordered: true
+                    enabled: root.live && !root.rootsBusy && root.rootsPath.trim() !== ""
+                    onClicked: root.rootsPreview()
+                  }
+                }
+                Text {
+                  textFormat: Text.PlainText
+                  Layout.fillWidth: true
+                  text: "Same as: worldline " + (root.initialized ? "root add" : "init") + " <path>. Refusals you may see: ROOT_IS_SYMLINK, OVERLAPPING_ROOT, CROSS_FILESYSTEM_ROOT (must share the data store's filesystem), WORLDLINE_SELF_CAPTURE, ROOT_SET_BUSY (a world is running or a transaction is open)."
+                  color: Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
+                Text {
+                  textFormat: Text.PlainText
+                  visible: root.rootsError !== ""
+                  Layout.fillWidth: true
+                  text: root.rootsError
+                  color: Color.urgent
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
+              }
+
+              WlCard {
+                visible: root.rootsDryRun !== null
+                title: "DRY RUN — WHAT WOULD CHANGE"
+                Text {
+                  textFormat: Text.PlainText
+                  Layout.fillWidth: true
+                  text: root.rootsDryRun ? String(root.rootsDryRun.effect || "") : ""
+                  color: Color.foreground
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.body
+                  wrapMode: Text.WordWrap
+                }
+                Repeater {
+                  model: root.rootsDryRun ? root.rootsDryRun.roots : []
+                  delegate: Text {
+                    required property var modelData
+                    textFormat: Text.PlainText
+                    Layout.fillWidth: true
+                    text: "  " + String(modelData.path) + "  [" + String(modelData.kind) + "]" + (modelData.primary ? "  PRIMARY" : "")
+                    color: Color.foreground
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideLeft
+                  }
+                }
+                Text {
+                  textFormat: Text.PlainText
+                  Layout.fillWidth: true
+                  text: "Nothing has moved yet. Confirming runs the same command with --yes."
+                  color: Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+                RowLayout {
+                  Layout.fillWidth: true
+                  Item { Layout.fillWidth: true }
+                  Button { text: "Discard"; bordered: true; onClicked: root.rootsDryRun = null }
+                  Button {
+                    text: root.initialized ? "Add this root" : "Register and create PRIME"
+                    bordered: true
+                    selected: true
+                    enabled: root.live && !root.rootsBusy
+                    onClicked: { root.rootsConfirmKind = "add"; root.rootsConfirmOpen = true }
+                  }
+                }
+              }
+
+              WlCard {
+                title: "NEXT"
+                Text {
+                  textFormat: Text.PlainText
+                  Layout.fillWidth: true
+                  text: "1. Register a root (above).\n2. Declare evidence in <primary-root>/.worldline.json — a required build and test check. Without it every candidate finalizes UNASSESSED and risk cannot drop below MEDIUM.\n3. Fork (F): one agent, or a deliberate three-agent race.\n4. Compare candidates in the inspector, then review and commit one prepared transaction (C).\n5. If you dislike the result, return (R) restores the previous checkpoint through the same atomic mechanism."
+                  color: Color.foreground
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
+              }
+              RowLayout { Layout.fillWidth: true; Item { Layout.fillWidth: true } Button { text: "Back to multiverse (Esc)"; bordered: true; onClicked: root.mode = "multiverse" } }
             }
           }
 
-          // ============ MULTIVERSE MODE ============
+          // ============ MULTIVERSE ============
           RowLayout {
             anchors.fill: parent
             visible: root.mode === "multiverse"
@@ -660,7 +875,8 @@ Item {
 
             // -------- left rail
             Flickable {
-              Layout.preferredWidth: Style.space(300)
+              Layout.preferredWidth: panel.railWidth
+              Layout.minimumWidth: Style.space(200)
               Layout.fillHeight: true
               contentHeight: leftRail.implicitHeight
               clip: true
@@ -671,128 +887,124 @@ Item {
                 width: parent.width
                 spacing: Style.spacing.md
 
-                Card {
-                  SectionTitle { text: "REALITY" }
-                  KV { k: "PRIME"; v: root.initialized ? root.shortHash(root.lastGoodStatus.prime.id) : "—" }
-                  KV { k: "GENERATION"; v: root.initialized ? String(root.lastGoodStatus.prime.generation || "").substring(0, 8) : "—" }
-                  KV {
+                WlCard {
+                  title: "REALITY"
+                  hint: root.initialized ? Model.fmtAge(Model.daemonAgeMs(root.status, root.nowMs)).replace(" ago", " old") : ""
+                  Text {
+                    textFormat: Text.PlainText
+                    visible: !root.initialized
+                    Layout.fillWidth: true
+                    text: root.signalState === "offline" ? "No daemon signal." : "No PRIME. Press M to register a root."
+                    color: Color.muted
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
+                  }
+                  WlKV { visible: root.initialized; k: root.primeLabel; v: root.initialized ? Model.shortHash(root.status.prime.id) : "—" }
+                  WlKV { visible: root.initialized; k: "GENERATION"; v: root.initialized ? Model.shortId(root.status.prime.generation, 8) : "—" }
+                  WlKV {
+                    visible: root.initialized
                     k: "DIRTY"
-                    v: root.initialized ? (root.lastGoodStatus.prime.dirty ? "YES" : "no") : "—"
-                    vColor: root.initialized && root.lastGoodStatus.prime.dirty ? Color.urgent : Color.foreground
+                    v: root.initialized ? (root.status.prime.dirty ? "YES — recaptured before the next mutation" : "no") : "—"
+                    vColor: root.initialized && root.status.prime.dirty ? Color.urgent : Color.foreground
                   }
                   Repeater {
-                    model: root.initialized && Array.isArray(root.lastGoodStatus.prime.roots)
-                           ? root.lastGoodStatus.prime.roots : []
-                    delegate: ColumnLayout {
+                    model: root.initialized && Array.isArray(root.status.prime.roots) ? root.status.prime.roots : []
+                    delegate: RowLayout {
                       required property var modelData
                       Layout.fillWidth: true
-                      spacing: 0
-                      Text { textFormat: Text.PlainText;
-                        Layout.fillWidth: true
-                        text: (modelData.primary ? "★ " : "· ") + String(modelData.path || "")
-                        color: Color.foreground
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.caption
-                        elide: Text.ElideLeft
-                      }
-                      Text { textFormat: Text.PlainText;
-                        text: String(modelData.kind || "")
-                        color: Color.muted
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.caption
-                      }
+                      spacing: Style.spacing.xs
+                      Text { textFormat: Text.PlainText; text: modelData.primary ? "★" : "·"; color: Color.accent; font.family: Style.font.family; font.pixelSize: Style.font.caption }
+                      Text { textFormat: Text.PlainText; Layout.fillWidth: true; text: String(modelData.path || ""); color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.caption; elide: Text.ElideLeft }
+                      Text { textFormat: Text.PlainText; text: String(modelData.kind || ""); color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
                     }
+                  }
+                  RowLayout {
+                    Layout.fillWidth: true
+                    Item { Layout.fillWidth: true }
+                    Button { text: "manage roots (M)"; fontSize: Style.font.caption; onClicked: root.mode = "roots" }
                   }
                 }
 
-                Card {
-                  SectionTitle { text: "LAST COLLAPSE" }
+                WlCard {
+                  title: "LAST COLLAPSE"
                   visible: root.receipt !== null && root.receipt.receiptId !== undefined
-                  KV { k: "RECEIPT"; v: root.receipt ? root.shortHash(root.receipt.receiptId) : "—" }
-                  KV {
+                  WlKV { k: "RECEIPT"; v: root.receipt ? Model.shortHash(root.receipt.receiptId) : "—"; vColor: Color.accent }
+                  WlKV {
                     k: "STATE"
-                    v: root.receipt && root.receipt.atomicCollapse ? String(root.receipt.atomicCollapse.state || "—") : "—"
-                    vColor: root.receipt && root.receipt.atomicCollapse && root.receipt.atomicCollapse.state === "COMMITTED"
-                            ? Color.accent : Color.foreground
+                    v: root.receipt && root.receipt.atomicCollapse ? String(root.receipt.atomicCollapse.state || "—") + " · " + String(root.receipt.atomicCollapse.mechanism || "") : "—"
                   }
-                  KV {
-                    k: "MECHANISM"
-                    v: root.receipt && root.receipt.atomicCollapse ? String(root.receipt.atomicCollapse.mechanism || "—") : "—"
-                  }
-                  KV {
+                  WlKV {
                     k: "INVARIANTS"
                     v: {
                       var ip = root.receipt ? root.receipt.invariantPreservation : null
                       if (!ip) return "—"
                       if (typeof ip === "string") return ip
-                      return String(ip.state || "?") + " · " + Number(ip.checks || 0) + " checks"
+                      return String(ip.state || "?") + (ip.checks ? " · " + Number(ip.checks) + " checks" : "") + (ip.reason ? " · " + ip.reason : "")
                     }
-                    vColor: {
-                      var ip = root.receipt ? root.receipt.invariantPreservation : null
-                      var s = ip ? (typeof ip === "string" ? ip : ip.state) : ""
-                      return s === "PROVED" ? Color.accent : Color.foreground
-                    }
+                    vColor: root.receipt && root.receipt.invariantPreservation && root.receipt.invariantPreservation.state === "PROVED" ? Color.accent : Color.foreground
                   }
-                  KV {
+                  WlKV {
                     k: "CANDIDATE"
                     v: {
                       if (!root.receipt) return "—"
-                      var w = root.worldById(root.receipt.candidateWorld)
-                      return w ? root.shortAlias(w) : root.shortHash(root.receipt.candidateWorld)
+                      var w = Model.worldByContent(root.worlds, root.receipt.candidateWorld)
+                      return w ? Model.shortAlias(w, root.status, root.primeLabel) : Model.shortHash(root.receipt.candidateWorld)
                     }
                   }
-                  KV {
-                    k: "NON-CLAIMS"
-                    v: root.receipt && Array.isArray(root.receipt.nonClaims) ? String(root.receipt.nonClaims.length) + " stated" : "—"
-                  }
-                }
-
-                Card {
-                  SectionTitle { text: "CENSUS — " + root.worlds.length + " WORLDS" }
+                  WlKV { k: "MERGE SET"; v: root.receipt && root.receipt.mergeSet ? (root.receipt.mergeSet.files || []).length + " files · " + (root.receipt.mergeSet.generatedArtifacts || []).length + " generated · " + (root.receipt.mergeSet.dependencyChanges || []).length + " dep changes" : "—" }
+                  WlKV { k: "NON-CLAIMS"; v: root.receipt && Array.isArray(root.receipt.nonClaims) ? root.receipt.nonClaims.length + " stated" : "—" }
                   Repeater {
-                    model: root.stateCounts()
-                    delegate: RowLayout {
-                      required property var modelData
-                      Layout.fillWidth: true
-                      spacing: Style.spacing.sm
-                      Rectangle { width: Style.space(8); height: width; radius: width / 2; color: root.stateColor(modelData.state) }
-                      Text { textFormat: Text.PlainText; text: modelData.state; color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.caption }
-                      Item { Layout.fillWidth: true }
-                      Text { textFormat: Text.PlainText; text: String(modelData.count); color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true }
-                    }
+                    model: root.showWorldDetails && root.receipt && Array.isArray(root.receipt.nonClaims) ? root.receipt.nonClaims : []
+                    delegate: Text { required property var modelData; textFormat: Text.PlainText; Layout.fillWidth: true; text: "· " + String(modelData); color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap }
                   }
                 }
 
-                Card {
-                  SectionTitle { text: "JOBS — " + root.runningJobs() + " RUNNING" }
+                WlCard {
+                  title: "JOBS — " + root.runningJobs + " RUNNING"
                   visible: root.jobs.length > 0
                   Repeater {
-                    model: root.recentJobs()
+                    model: {
+                      var sorted = root.jobs.slice()
+                      sorted.sort(function(a, b) { return String(b.started || "").localeCompare(String(a.started || "")) })
+                      return sorted.slice(0, 6)
+                    }
                     delegate: ColumnLayout {
+                      id: jobRow
                       required property var modelData
+                      readonly property var jobWorld: Model.worldByInstance(root.worlds, modelData.world)
+                      readonly property bool active: modelData.state === "RUNNING" || modelData.state === "STARTING" || modelData.state === "FINALIZING"
                       Layout.fillWidth: true
                       spacing: 0
                       RowLayout {
                         Layout.fillWidth: true
                         spacing: Style.spacing.sm
-                        Text { textFormat: Text.PlainText;
-                          text: modelData.state
-                          color: modelData.state === "RUNNING" ? Color.accent
-                               : (modelData.state === "DEGRADED" || modelData.state === "FAILED" ? Color.urgent : Color.muted)
+                        Text {
+                          textFormat: Text.PlainText
+                          text: String(modelData.state || "?")
+                          color: jobRow.active ? Color.accent : (modelData.state === "DEGRADED" || modelData.state === "DEAD" || modelData.state === "CANCELLED" ? Color.urgent : Color.muted)
                           font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true
                         }
-                        Text { textFormat: Text.PlainText;
+                        Text {
+                          textFormat: Text.PlainText
                           Layout.fillWidth: true
-                          text: modelData.alias; color: Color.foreground
-                          font.family: Style.font.family; font.pixelSize: Style.font.caption
-                          elide: Text.ElideRight
+                          text: jobRow.jobWorld ? Model.shortAlias(jobRow.jobWorld, root.status, root.primeLabel) : Model.shortId(modelData.world, 8)
+                          color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.caption; elide: Text.ElideRight
                         }
-                        Text { textFormat: Text.PlainText; text: modelData.dur; color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
+                        Text { textFormat: Text.PlainText; text: Model.fmtDuration(modelData.started, modelData.ended, root.nowMs); color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
+                        Button {
+                          visible: jobRow.active
+                          text: "cancel"
+                          fontSize: Style.font.caption
+                          enabled: root.live
+                          onClicked: root.cancelJobWorld(modelData.world)
+                        }
                       }
-                      Text { textFormat: Text.PlainText;
-                        visible: modelData.error !== ""
+                      Text {
+                        textFormat: Text.PlainText
+                        visible: Model.errorText(modelData.error) !== ""
                         Layout.fillWidth: true
-                        text: modelData.error
+                        text: Model.errorText(modelData.error)
                         color: Color.urgent
                         font.family: Style.font.family; font.pixelSize: Style.font.caption
                         elide: Text.ElideRight
@@ -801,66 +1013,112 @@ Item {
                   }
                 }
 
-                Card {
-                  SectionTitle { text: "CAPABILITIES" }
+                WlCard {
+                  title: "DIAGNOSTICS"
+                  hint: root.doctorLoading ? "probing…" : (root.doctor ? "worldline doctor" : "")
+                  urgent: root.integrityUrgent
+                  Text {
+                    textFormat: Text.PlainText
+                    visible: root.doctorError !== ""
+                    Layout.fillWidth: true
+                    text: root.doctorError
+                    color: Color.urgent
+                    font.family: Style.font.family; font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
+                  }
+                  Text {
+                    textFormat: Text.PlainText
+                    visible: !root.doctor && root.doctorError === ""
+                    Layout.fillWidth: true
+                    text: root.fixture ? "not probed for fixture data" : (root.doctorLoading ? "running worldline doctor…" : "no doctor report yet")
+                    color: Color.muted
+                    font.family: Style.font.family; font.pixelSize: Style.font.caption
+                  }
                   Repeater {
-                    model: root.capRows()
+                    model: root.integrity
+                    delegate: ColumnLayout {
+                      required property var modelData
+                      Layout.fillWidth: true
+                      spacing: 0
+                      RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Style.spacing.sm
+                        Text { textFormat: Text.PlainText; text: modelData.urgent ? "⚠" : "✓"; color: modelData.urgent ? Color.urgent : Color.accent; font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true }
+                        Text { textFormat: Text.PlainText; Layout.fillWidth: true; text: modelData.name; color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.caption }
+                        Text { textFormat: Text.PlainText; text: modelData.state; color: modelData.urgent ? Color.urgent : Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true }
+                      }
+                      Text {
+                        textFormat: Text.PlainText
+                        Layout.fillWidth: true
+                        text: modelData.detail
+                        color: Color.muted
+                        font.family: Style.font.family; font.pixelSize: Style.font.caption
+                        wrapMode: Text.WordWrap
+                        maximumLineCount: 3
+                        elide: Text.ElideRight
+                      }
+                    }
+                  }
+                  Repeater {
+                    model: root.openTransactions
                     delegate: RowLayout {
                       required property var modelData
                       Layout.fillWidth: true
                       spacing: Style.spacing.sm
-                      Rectangle {
-                        width: Style.space(7); height: width; radius: width / 2
-                        color: modelData.ok ? Color.accent : "transparent"
-                        border.color: modelData.ok ? Color.accent : Color.muted
-                        border.width: 1
+                      Text { textFormat: Text.PlainText; text: "⚠"; color: Color.urgent; font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true }
+                      Text {
+                        textFormat: Text.PlainText
+                        Layout.fillWidth: true
+                        text: "open " + String(modelData.kind) + " " + Model.shortId(modelData.transactionId, 8) + " for " + String(modelData.candidateAlias || "?") + " (" + String(modelData.state) + ") — blocks root-set changes"
+                        color: Color.foreground
+                        font.family: Style.font.family; font.pixelSize: Style.font.caption
+                        wrapMode: Text.WordWrap
                       }
+                      Button { text: "abort"; fontSize: Style.font.caption; enabled: root.live; onClicked: root.abortTransaction(modelData.transactionId) }
+                    }
+                  }
+                  RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Style.spacing.sm
+                    Button { text: root.showCapabilities ? "hide capabilities" : "capabilities"; fontSize: Style.font.caption; onClicked: root.showCapabilities = !root.showCapabilities }
+                    Item { Layout.fillWidth: true }
+                    Button { text: "re-probe (D)"; fontSize: Style.font.caption; enabled: !root.doctorLoading && !root.fixture; onClicked: root.refreshDoctor(true) }
+                  }
+                  Repeater {
+                    model: root.showCapabilities ? Model.capabilityRows(root.doctor || root.capabilities) : []
+                    delegate: RowLayout {
+                      required property var modelData
+                      Layout.fillWidth: true
+                      spacing: Style.spacing.sm
+                      Text { textFormat: Text.PlainText; text: modelData.ok ? "✓" : "⊘"; color: modelData.ok ? Color.accent : Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
                       Text { textFormat: Text.PlainText; text: modelData.name; color: modelData.ok ? Color.foreground : Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
                       Item { Layout.fillWidth: true }
-                      Text { textFormat: Text.PlainText;
-                        Layout.maximumWidth: Style.space(130)
-                        text: modelData.note; color: Color.muted
-                        font.family: Style.font.family; font.pixelSize: Style.font.caption
-                        elide: Text.ElideRight
-                        horizontalAlignment: Text.AlignRight
-                      }
+                      Text { textFormat: Text.PlainText; Layout.maximumWidth: Style.space(150); text: modelData.note; color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption; elide: Text.ElideRight; horizontalAlignment: Text.AlignRight }
                     }
                   }
                 }
 
-                Card {
-                  SectionTitle { text: "ADAPTERS" }
-                  visible: root.adapters.length > 0
+                WlCard {
+                  title: "ADAPTERS"
+                  hint: root.adaptersLoading ? "probing…" : ""
+                  visible: root.adapters.length > 0 || root.adaptersLoading
                   Repeater {
                     model: root.adapters
                     delegate: RowLayout {
                       required property var modelData
                       Layout.fillWidth: true
                       spacing: Style.spacing.sm
-                      Rectangle {
-                        width: Style.space(7); height: width; radius: width / 2
-                        color: modelData.state === "AVAILABLE" ? Color.accent : "transparent"
-                        border.color: modelData.state === "AVAILABLE" ? Color.accent : Color.muted
-                        border.width: 1
-                      }
-                      Text { textFormat: Text.PlainText;
-                        text: String(modelData.name || "")
-                        color: modelData.state === "AVAILABLE" ? Color.foreground : Color.muted
-                        font.family: Style.font.family; font.pixelSize: Style.font.caption
-                      }
+                      Text { textFormat: Text.PlainText; text: modelData.state === "AVAILABLE" ? "✓" : "⊘"; color: modelData.state === "AVAILABLE" ? Color.accent : Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
+                      Text { textFormat: Text.PlainText; text: String(modelData.name || ""); color: modelData.state === "AVAILABLE" ? Color.foreground : Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
                       Item { Layout.fillWidth: true }
-                      Text { textFormat: Text.PlainText;
-                        text: String(modelData.state || "")
-                        color: modelData.state === "AVAILABLE" ? Color.accent : Color.muted
-                        font.family: Style.font.family; font.pixelSize: Style.font.caption
-                      }
+                      Text { textFormat: Text.PlainText; Layout.maximumWidth: Style.space(160); text: modelData.state === "AVAILABLE" ? "AVAILABLE" : String(modelData.reason || modelData.state || ""); color: modelData.state === "AVAILABLE" ? Color.accent : Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
                     }
                   }
                 }
               }
             }
 
-            // -------- center: the multiverse graph
+            // -------- center
             ColumnLayout {
               Layout.fillWidth: true
               Layout.fillHeight: true
@@ -872,9 +1130,72 @@ Item {
                 Layout.fillHeight: true
                 clip: true
 
+                // empty states
+                WlCard {
+                  visible: root.signalState === "offline" && !root.fixture
+                  anchors.centerIn: parent
+                  width: Math.min(parent.width - Style.space(40), Style.space(520))
+                  urgent: true
+                  title: "NO SIGNAL"
+                  Text {
+                    textFormat: Text.PlainText
+                    Layout.fillWidth: true
+                    text: root.status ? "The daemon wrote STOPPED or has not published for a long time." : "No status document has been read from " + root.statusPath + "."
+                    color: Color.foreground
+                    font.family: Style.font.family; font.pixelSize: Style.font.body
+                    wrapMode: Text.WordWrap
+                  }
+                  Text {
+                    textFormat: Text.PlainText
+                    Layout.fillWidth: true
+                    text: "Check the daemon:\n  systemctl --user status worldlined.service\n  journalctl --user -u worldlined.service -n 50\nStart it with:\n  systemctl --user start worldlined.service\nRetained data below (if any) is not live and cannot authorize anything."
+                    color: Color.muted
+                    font.family: Style.font.family; font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
+                  }
+                }
+
+                WlCard {
+                  visible: root.signalState !== "offline" && !root.initialized
+                  anchors.centerIn: parent
+                  width: Math.min(parent.width - Style.space(40), Style.space(560))
+                  title: "FIRST RUN"
+                  Text {
+                    textFormat: Text.PlainText
+                    Layout.fillWidth: true
+                    text: "The daemon is running and owns nothing. Register the directory you want agents to work on; it is moved behind a symlink into the managed store at the exact same path, and that capture becomes PRIME."
+                    color: Color.foreground
+                    font.family: Style.font.family; font.pixelSize: Style.font.body
+                    wrapMode: Text.WordWrap
+                  }
+                  Text {
+                    textFormat: Text.PlainText
+                    Layout.fillWidth: true
+                    text: "worldline init /path/to/project"
+                    color: Color.accent
+                    font.family: Style.font.family; font.pixelSize: Style.font.body
+                    font.bold: true
+                  }
+                  RowLayout {
+                    Layout.fillWidth: true
+                    Item { Layout.fillWidth: true }
+                    Button { text: "Register a root (M)"; bordered: true; selected: true; onClicked: root.mode = "roots" }
+                  }
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  visible: root.initialized && root.worlds.length === 0
+                  anchors.centerIn: parent
+                  text: "PRIME exists but no world has been published yet."
+                  color: Color.muted
+                  font.family: Style.font.family; font.pixelSize: Style.font.body
+                }
+
                 Canvas {
                   id: graphCanvas
                   anchors.fill: parent
+                  visible: root.initialized && root.worlds.length > 0
                   property var layoutNodes: []
 
                   function computeLayout() {
@@ -883,7 +1204,7 @@ Item {
                     function depth(world) {
                       if (!world || !world.parent) return 0
                       if (depths[world.instanceId] !== undefined) return depths[world.instanceId]
-                      var parent = root.worldByInstance(world.parent)
+                      var parent = Model.worldByInstance(root.worlds, world.parent)
                       depths[world.instanceId] = parent ? depth(parent) + 1 : 0
                       return depths[world.instanceId]
                     }
@@ -893,6 +1214,7 @@ Item {
                       byDepth[d].push(root.worlds[i])
                     }
                     var out = []
+                    var rowGap = Style.space(118)
                     for (var key in byDepth) {
                       var row = byDepth[key]
                       for (var j = 0; j < row.length; j++) {
@@ -900,7 +1222,7 @@ Item {
                           world: row[j],
                           depth: Number(key),
                           x: (j + 1) * graphViewport.width / (row.length + 1),
-                          y: Style.space(60) + Number(key) * Style.space(110)
+                          y: Style.space(64) + Number(key) * rowGap
                         })
                       }
                     }
@@ -917,18 +1239,18 @@ Item {
                     var world = root.hasSelection ? root.selectedWorld : null
                     while (world) {
                       path[world.instanceId] = true
-                      world = root.worldByInstance(world.parent)
+                      world = Model.worldByInstance(root.worlds, world.parent)
                     }
                     return path
                   }
 
                   function nodeRadius(world) {
-                    var files = root.deltaFiles(world)
+                    var files = Model.deltaCount(world)
                     return Style.space(10) + Math.min(Style.space(8), Math.log2(1 + files) * Style.space(2))
                   }
 
                   onPaint: {
-                    if (!root.opened) return
+                    if (!root.opened || !visible) return
                     computeLayout()
                     var context = getContext("2d")
                     if (!context) return
@@ -938,30 +1260,29 @@ Item {
                     context.translate(root.graphPanX, root.graphPanY)
                     context.scale(root.graphZoom, root.graphZoom)
 
-                    // generation guide lines
                     var maxDepth = 0
                     for (var g = 0; g < layoutNodes.length; g++) maxDepth = Math.max(maxDepth, layoutNodes[g].depth)
                     context.lineWidth = 1
                     for (var gd = 0; gd <= maxDepth; gd++) {
-                      var gy = Style.space(60) + gd * Style.space(110)
+                      var gy = Style.space(64) + gd * Style.space(118)
                       context.globalAlpha = 0.10
                       context.strokeStyle = Color.muted
                       context.beginPath()
                       context.moveTo(Style.space(8), gy)
                       context.lineTo(width / root.graphZoom - Style.space(8), gy)
                       context.stroke()
-                      context.globalAlpha = 0.35
+                      context.globalAlpha = 0.4
                       context.fillStyle = Color.muted
                       context.font = Style.font.caption + "px " + Style.font.family
                       context.textAlign = "left"
-                      context.fillText("g" + gd, Style.space(10), gy - Style.space(6))
+                      context.fillText("generation " + gd, Style.space(10), gy - Style.space(6))
                     }
 
                     var cone = selectedPath()
                     var selected = root.hasSelection ? root.selectedWorld : null
                     var selectedNode = selected ? node(selected.instanceId) : null
+                    var stale = !root.live && !root.fixture
 
-                    context.lineWidth = 1.5
                     for (var i = 0; i < layoutNodes.length; i++) {
                       var child = layoutNodes[i]
                       var parent = node(child.world.parent)
@@ -987,11 +1308,22 @@ Item {
                       var world = item.world
                       var active = selected && world.instanceId === selected.instanceId
                       var pathActive = cone[world.instanceId]
-                      var isPrime = root.lastGoodStatus.prime && world.instanceId === root.lastGoodStatus.prime.instanceId
+                      var isPrime = root.status.prime && world.instanceId === root.status.prime.instanceId
+                      var running = Model.isRunning(world)
                       var radius = nodeRadius(world)
                       context.globalAlpha = pathActive ? 1 : root.siblingOpacity * 0.48
 
-                      // selection halo
+                      if (running && root.motionEnabled) {
+                        var pulse = radius + Style.space(4) + root.pulsePhase * Style.space(10)
+                        context.globalAlpha = (1 - root.pulsePhase) * 0.6
+                        context.strokeStyle = Color.accent
+                        context.lineWidth = 1.5
+                        context.beginPath()
+                        context.arc(item.x, item.y, pulse, 0, Math.PI * 2)
+                        context.stroke()
+                        context.globalAlpha = pathActive ? 1 : root.siblingOpacity * 0.48
+                      }
+
                       if (active) {
                         context.fillStyle = Util.alpha(Color.accent, 0.15)
                         context.beginPath()
@@ -999,15 +1331,17 @@ Item {
                         context.fill()
                       }
 
+                      var stateColor = root.toneColor(Model.stateTone(world.state))
                       context.fillStyle = active ? Color.accent : Color.background
-                      context.strokeStyle = active ? Color.accent : root.stateColor(world.state)
+                      context.strokeStyle = active ? Color.accent : stateColor
                       context.lineWidth = active ? 3 : 1.6
+                      if (running) context.setLineDash([Style.space(3), Style.space(3)])
                       context.beginPath()
                       context.arc(item.x, item.y, radius, 0, Math.PI * 2)
                       context.fill()
                       context.stroke()
+                      context.setLineDash([])
 
-                      // PRIME double ring
                       if (isPrime) {
                         context.lineWidth = 1.2
                         context.strokeStyle = Color.accent
@@ -1016,27 +1350,28 @@ Item {
                         context.stroke()
                       }
 
-                      // evidence badge: filled = PASS, urgent = FAIL, hollow = UNASSESSED
-                      var proof = root.proofState(world)
+                      // evidence badge: filled accent PASS, filled urgent FAIL, hollow otherwise; glyph beside it
+                      var evidence = Model.evidence(world, stale).state
                       var bx = item.x + radius * 0.85
                       var by = item.y - radius * 0.85
                       context.lineWidth = 1.4
                       context.beginPath()
-                      context.arc(bx, by, Style.space(4), 0, Math.PI * 2)
-                      if (proof === "PASS") { context.fillStyle = Color.accent; context.fill() }
-                      else if (proof === "FAIL") { context.fillStyle = Color.urgent; context.fill() }
+                      context.arc(bx, by, Style.space(4.5), 0, Math.PI * 2)
+                      if (evidence === "PASS") { context.fillStyle = Color.accent; context.fill() }
+                      else if (evidence === "FAIL") { context.fillStyle = Color.urgent; context.fill() }
                       else { context.fillStyle = Color.background; context.fill(); context.strokeStyle = Color.muted; context.stroke() }
 
-                      // labels: alias, then agent + delta
-                      context.fillStyle = active ? Color.background : (pathActive ? Color.foreground : Color.muted)
                       context.font = Style.font.caption + "px " + Style.font.family
                       context.textAlign = "center"
                       context.fillStyle = pathActive ? Color.foreground : Color.muted
-                      context.fillText(root.shortAlias(world), item.x, item.y + radius + Style.space(14))
+                      context.fillText(Model.shortAlias(world, root.status, root.primeLabel), item.x, item.y + radius + Style.space(14))
                       context.fillStyle = Color.muted
-                      var files = root.deltaFiles(world)
-                      context.fillText(String(world.agent || "—") + (files > 0 ? "  +" + files : ""),
-                                       item.x, item.y + radius + Style.space(27))
+                      var files = Model.deltaCount(world)
+                      var second = String(world.agent || "—") + (files > 0 ? "  +" + files : "")
+                      if (running) second = "▶ " + second
+                      context.fillText(second, item.x, item.y + radius + Style.space(27))
+                      context.fillStyle = evidence === "PASS" ? Color.accent : evidence === "FAIL" ? Color.urgent : Color.muted
+                      context.fillText(String(world.state || "") + " · " + evidence, item.x, item.y + radius + Style.space(40))
                     }
                     context.restore()
                   }
@@ -1044,10 +1379,11 @@ Item {
 
                 MouseArea {
                   anchors.fill: parent
+                  enabled: graphCanvas.visible
                   property real lastX: 0
                   property real lastY: 0
                   property bool moved: false
-                  onPressed: function(mouse) { lastX = mouse.x; lastY = mouse.y; moved = false }
+                  onPressed: function(mouse) { lastX = mouse.x; lastY = mouse.y; moved = false; keyCatcher.forceActiveFocus() }
                   onPositionChanged: function(mouse) {
                     if (!(mouse.buttons & Qt.LeftButton)) return
                     var dx = mouse.x - lastX
@@ -1067,12 +1403,13 @@ Item {
                       var node = graphCanvas.layoutNodes[i]
                       var dx = x - node.x
                       var dy = y - node.y
-                      if (dx * dx + dy * dy <= Style.space(24) * Style.space(24)) {
+                      if (dx * dx + dy * dy <= Style.space(26) * Style.space(26)) {
                         root.selectAlias(node.world.instanceId)
                         break
                       }
                     }
                   }
+                  onDoubleClicked: function(mouse) { if (root.hasSelection) root.inspectSelected() }
                   onWheel: function(wheel) {
                     var next = Math.max(0.5, Math.min(2.2, root.graphZoom + (wheel.angleDelta.y > 0 ? 0.1 : -0.1)))
                     root.graphZoom = next
@@ -1082,49 +1419,27 @@ Item {
                 }
               }
 
-              // graph legend + zoom — a Flow so its minimum width is one
-              // item, never the sum: the inspector rail must keep its lane.
               Flow {
                 Layout.fillWidth: true
                 spacing: Style.spacing.md
                 Repeater {
-                  model: root.stateOrder
+                  model: Model.STATE_ORDER
                   delegate: Row {
                     required property var modelData
                     spacing: Style.spacing.xs
-                    Rectangle { width: Style.space(7); height: width; radius: width / 2; color: root.stateColor(modelData); anchors.verticalCenter: parent.verticalCenter }
+                    Rectangle { width: Style.space(7); height: width; radius: width / 2; color: root.toneColor(Model.stateTone(modelData)); anchors.verticalCenter: parent.verticalCenter }
                     Text { textFormat: Text.PlainText; text: modelData; color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
                   }
                 }
-                Text { textFormat: Text.PlainText;
-                  text: "◈ PASS filled · FAIL red · hollow unassessed"
-                  color: Color.muted
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.caption
-                }
-                Text { textFormat: Text.PlainText;
-                  text: "zoom " + Math.round(root.graphZoom * 100) + "%"
-                  color: Color.muted
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.caption
-                }
-                Text { textFormat: Text.PlainText;
-                  text: "[reset]"
-                  color: Color.accent
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.caption
-                  MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: { root.graphZoom = 1; root.graphPanX = 0; root.graphPanY = 0; graphCanvas.requestPaint() }
-                  }
-                }
+                Text { textFormat: Text.PlainText; text: "badge: ● PASS · ● FAIL (red) · ○ UNASSESSED/UNAVAILABLE/STALE · dashed ring = running · double ring = PRIME"; color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
+                Text { textFormat: Text.PlainText; text: "zoom " + Math.round(root.graphZoom * 100) + "% (0 resets)"; color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
               }
             }
 
             // -------- right rail: inspector
             Flickable {
-              Layout.preferredWidth: Style.space(340)
+              Layout.preferredWidth: panel.inspectorWidth
+              Layout.minimumWidth: Style.space(220)
               Layout.fillHeight: true
               contentHeight: inspector.implicitHeight
               clip: true
@@ -1135,125 +1450,149 @@ Item {
                 width: parent.width
                 spacing: Style.spacing.md
 
-                Card {
-                  SectionTitle { text: root.hasSelection ? "WORLD" : "INSPECTOR" }
-                  Text { textFormat: Text.PlainText;
+                WlCard {
+                  title: root.hasSelection ? "WORLD" : "INSPECTOR"
+                  Text {
+                    textFormat: Text.PlainText
                     Layout.fillWidth: true
-                    text: root.hasSelection ? root.shortAlias(root.selectedWorld) : "Select a world"
+                    text: root.hasSelection ? Model.displayAlias(root.selectedWorld, root.status, root.primeLabel) : "Select a world (click a node, or ← → ↑ ↓)"
                     color: Color.foreground
                     font.family: Style.font.family
                     font.pixelSize: Style.font.title
                     font.bold: true
-                    elide: Text.ElideRight
+                    elide: Text.ElideMiddle
                   }
-                  RowLayout {
+                  Flow {
                     visible: root.hasSelection
-                    spacing: Style.spacing.sm
-                    StateChip {
-                      label: root.hasSelection ? String(root.selectedWorld.state || "?") : ""
-                      tone: root.stateColor(root.hasSelection ? root.selectedWorld.state : "")
+                    Layout.fillWidth: true
+                    spacing: Style.spacing.xs
+                    WlChip { label: root.hasSelection ? String(root.selectedWorld.state || "?") : ""; tone: Model.stateTone(root.hasSelection ? root.selectedWorld.state : ""); filled: true }
+                    WlChip {
+                      label: "EVIDENCE " + root.selectedEvidence.state
+                      glyph: Model.evidenceGlyph(root.selectedEvidence.state)
+                      tone: Model.evidenceTone(root.selectedEvidence.state)
+                      tooltipText: root.selectedEvidence.detail
                     }
-                    StateChip {
-                      visible: root.hasSelection && root.selectedWorld.risk !== undefined
-                      label: "RISK " + (root.hasSelection ? String(root.selectedWorld.risk || "") : "")
-                      tone: root.riskColor(root.hasSelection ? root.selectedWorld.risk : "")
-                    }
-                    StateChip {
-                      visible: root.hasSelection && root.selectedWorld.complexity !== undefined
-                      label: "CPLX " + (root.hasSelection ? String(root.selectedWorld.complexity || "") : "")
-                      tone: Color.muted
-                    }
+                    WlChip { visible: root.hasSelection && root.selectedWorld.risk !== undefined; label: "RISK " + (root.hasSelection ? String(root.selectedWorld.risk || "") : ""); tone: Model.riskTone(root.hasSelection ? root.selectedWorld.risk : "") }
+                    WlChip { visible: root.hasSelection && root.selectedWorld.complexity !== undefined; label: "CPLX " + (root.hasSelection ? String(root.selectedWorld.complexity || "") : ""); tone: "muted" }
+                    WlChip { visible: root.selectedJob !== null; label: "JOB " + (root.selectedJob ? String(root.selectedJob.state) : ""); glyph: "▶"; tone: "accent"; filled: true }
                   }
-                  Text { textFormat: Text.PlainText;
-                    visible: root.hasSelection && (root.selectedWorld.risk !== undefined || root.selectedWorld.complexity !== undefined)
-                    text: "derived labels — inputs below"
+                  Text {
+                    textFormat: Text.PlainText
+                    visible: root.hasSelection
+                    Layout.fillWidth: true
+                    text: root.selectedEvidence.detail + " · risk and complexity are derived labels; the inputs are below"
                     color: Color.muted
                     font.family: Style.font.family
                     font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
                   }
-                  KV { visible: root.hasSelection; k: "AGENT"; v: root.hasSelection ? String(root.selectedWorld.agent || "—") : "" }
-                  KV { visible: root.hasSelection; k: "CAUSE"; v: root.hasSelection ? String(root.selectedWorld.cause || "—") : "" }
-                  KV { visible: root.hasSelection; k: "BORN"; v: root.hasSelection ? root.fmtStamp(root.selectedWorld.born) : "" }
-                  KV {
+                  WlKV { visible: root.hasSelection; k: "AGENT"; v: root.hasSelection ? String(root.selectedWorld.agent || "—") : "" }
+                  WlKV { visible: root.hasSelection; k: "BORN"; v: root.hasSelection ? Model.fmtStamp(root.selectedWorld.born) : "" }
+                  WlKV {
                     visible: root.hasSelection
-                    k: root.hasSelection && root.selectedWorld.ended ? "LIFETIME" : "RUNNING"
-                    v: root.hasSelection ? root.fmtDur(root.selectedWorld.born, root.selectedWorld.ended) : ""
+                    k: root.hasSelection && root.selectedWorld.ended ? "LIFETIME" : "RUNNING FOR"
+                    v: root.hasSelection ? Model.fmtDuration(root.selectedWorld.born, root.selectedWorld.ended, root.nowMs) : ""
                     vColor: root.hasSelection && !root.selectedWorld.ended ? Color.accent : Color.foreground
                   }
-                  KV {
+                  WlKV {
                     visible: root.hasSelection
                     k: "PARENT"
                     v: {
                       if (!root.hasSelection) return ""
-                      var p = root.worldByInstance(root.selectedWorld.parent)
-                      return p ? root.shortAlias(p) : "PRIME"
+                      var p = Model.worldByInstance(root.worlds, root.selectedWorld.parent)
+                      return p ? Model.shortAlias(p, root.status, root.primeLabel) : (root.selectedWorld.parent ? "(not in status)" : "—")
                     }
                   }
-                  KV { visible: root.hasSelection; k: "DESCENDANTS"; v: root.hasSelection ? String(root.selectedWorld.descendants || 0) : "" }
-                  KV { visible: root.hasSelection; k: "HASH"; v: root.hasSelection ? root.shortHash(root.selectedWorld.hash) : "" }
-                }
-
-                Card {
-                  visible: root.hasSelection
-                  SectionTitle { text: "DELTA" }
-                  RowLayout {
+                  WlKV { visible: root.hasSelection; k: "DESCENDANTS"; v: root.hasSelection ? String(root.selectedWorld.descendants || 0) : "" }
+                  ColumnLayout {
+                    visible: root.hasSelection
                     Layout.fillWidth: true
-                    spacing: Style.spacing.md
-                    Text { textFormat: Text.PlainText;
-                      text: "+" + (root.hasSelection && root.selectedWorld.delta ? Number(root.selectedWorld.delta.added || 0) : 0)
-                      color: Color.accent; font.family: Style.font.family; font.pixelSize: Style.font.body; font.bold: true
-                    }
-                    Text { textFormat: Text.PlainText;
-                      text: "~" + (root.hasSelection && root.selectedWorld.delta ? Number(root.selectedWorld.delta.modified || 0) : 0)
-                      color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.body; font.bold: true
-                    }
-                    Text { textFormat: Text.PlainText;
-                      text: "−" + (root.hasSelection && root.selectedWorld.delta ? Number(root.selectedWorld.delta.deleted || 0) : 0)
-                      color: Color.urgent; font.family: Style.font.family; font.pixelSize: Style.font.body; font.bold: true
-                    }
-                    Item { Layout.fillWidth: true }
-                    Text { textFormat: Text.PlainText;
-                      text: root.deltaFiles(root.hasSelection ? root.selectedWorld : null) + " files"
-                      color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption
-                    }
-                  }
-                  Repeater {
-                    model: {
-                      if (!root.hasSelection || !root.selectedWorld.delta) return []
-                      var fs = root.selectedWorld.delta.files
-                      return Array.isArray(fs) ? fs.slice(0, 6) : []
-                    }
-                    delegate: Text { textFormat: Text.PlainText;
-                      required property var modelData
+                    spacing: 0
+                    RowLayout {
                       Layout.fillWidth: true
-                      text: "· " + root.fileLabel(modelData)
+                      Text { textFormat: Text.PlainText; text: "MISSION"; color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
+                      Item { Layout.fillWidth: true }
+                      Button { text: root.showMission ? "less" : "more"; fontSize: Style.font.caption; onClicked: root.showMission = !root.showMission }
+                    }
+                    Text {
+                      textFormat: Text.PlainText
+                      Layout.fillWidth: true
+                      text: root.hasSelection ? String(root.selectedWorld.cause || "—") : ""
                       color: Color.foreground
                       font.family: Style.font.family
                       font.pixelSize: Style.font.caption
-                      elide: Text.ElideLeft
+                      wrapMode: Text.WordWrap
+                      maximumLineCount: root.showMission ? 60 : 3
+                      elide: Text.ElideRight
                     }
                   }
-                  Text { textFormat: Text.PlainText;
-                    visible: root.deltaFiles(root.hasSelection ? root.selectedWorld : null) > 6
-                    text: "… and " + (root.deltaFiles(root.hasSelection ? root.selectedWorld : null) - 6) + " more"
-                    color: Color.muted
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.caption
+                  RowLayout {
+                    visible: root.hasSelection
+                    Layout.fillWidth: true
+                    Item { Layout.fillWidth: true }
+                    Button { text: root.showWorldDetails ? "hide identities" : "identities & hashes"; fontSize: Style.font.caption; onClicked: root.showWorldDetails = !root.showWorldDetails }
+                  }
+                  ColumnLayout {
+                    visible: root.hasSelection && root.showWorldDetails
+                    Layout.fillWidth: true
+                    spacing: Style.spacing.xxs
+                    WlKV { full: true; k: "content"; v: root.hasSelection ? String(root.selectedWorld.id || root.selectedWorld.hash || "—") : "" }
+                    WlKV { full: true; k: "instance"; v: root.hasSelection ? String(root.selectedWorld.instanceId || "") : "" }
+                    WlKV { full: true; k: "parent id"; v: root.hasSelection ? String(root.selectedWorld.parentId || "") : "" }
+                    WlKV { full: true; k: "base root"; v: root.hasSelection ? String(root.selectedWorld.baseRoot || "") : "" }
+                    WlKV { full: true; k: "root set"; v: root.hasSelection ? String(root.selectedWorld.rootSetHash || "") : "" }
+                    WlKV { k: "kind"; v: root.hasSelection ? String(root.selectedWorld.kind || "") : "" }
                   }
                 }
 
-                Card {
+                WlCard {
                   visible: root.hasSelection
-                  SectionTitle { text: "EVIDENCE" }
-                  Text { textFormat: Text.PlainText;
-                    visible: {
-                      if (!root.hasSelection) return false
-                      var c = root.selectedWorld.checks
-                      var p = root.selectedWorld.proofs
-                      return (!Array.isArray(c) || c.length === 0) && (!Array.isArray(p) || p.length === 0)
-                    }
+                  title: "DELTA"
+                  hint: root.hasSelection ? Model.deltaCount(root.selectedWorld) + " files" : ""
+                  RowLayout {
                     Layout.fillWidth: true
-                    text: "UNASSESSED — no checks configured for this root; risk cannot drop below MEDIUM"
+                    spacing: Style.spacing.md
+                    Text { textFormat: Text.PlainText; text: "+" + (root.hasSelection ? Model.deltaSummary(root.selectedWorld).added : 0); color: Color.accent; font.family: Style.font.family; font.pixelSize: Style.font.body; font.bold: true }
+                    Text { textFormat: Text.PlainText; text: "~" + (root.hasSelection ? Model.deltaSummary(root.selectedWorld).modified : 0); color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.body; font.bold: true }
+                    Text { textFormat: Text.PlainText; text: "−" + (root.hasSelection ? Model.deltaSummary(root.selectedWorld).deleted : 0); color: Color.urgent; font.family: Style.font.family; font.pixelSize: Style.font.body; font.bold: true }
+                    Item { Layout.fillWidth: true }
+                    Text { textFormat: Text.PlainText; text: root.hasSelection && Model.isRunning(root.selectedWorld) ? "measured at finalize" : ""; color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
+                  }
+                  Flickable {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Math.min(deltaList.implicitHeight, Style.space(180))
+                    contentHeight: deltaList.implicitHeight
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    ColumnLayout {
+                      id: deltaList
+                      width: parent.width
+                      spacing: 0
+                      Repeater {
+                        model: root.hasSelection && root.selectedWorld.delta && Array.isArray(root.selectedWorld.delta.files) ? root.selectedWorld.delta.files : []
+                        delegate: RowLayout {
+                          required property var modelData
+                          Layout.fillWidth: true
+                          spacing: Style.spacing.xs
+                          Text { textFormat: Text.PlainText; Layout.preferredWidth: Style.space(10); text: Model.operationKind(modelData); color: modelData.op === "ADD" ? Color.accent : modelData.op === "DELETE" ? Color.urgent : Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true }
+                          Text { textFormat: Text.PlainText; Layout.fillWidth: true; text: Model.operationLabel(modelData); color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.caption; elide: Text.ElideLeft }
+                        }
+                      }
+                    }
+                  }
+                }
+
+                WlCard {
+                  visible: root.hasSelection
+                  title: "EVIDENCE"
+                  Text {
+                    textFormat: Text.PlainText
+                    visible: root.hasSelection && (!Array.isArray(root.selectedWorld.checks) || root.selectedWorld.checks.length === 0)
+                    Layout.fillWidth: true
+                    text: root.hasSelection && Model.isRunning(root.selectedWorld)
+                      ? "UNASSESSED — checks run after the agent finishes"
+                      : "UNASSESSED — no checks were recorded for this world. Declare checks in .worldline.json; without them risk cannot drop below MEDIUM."
                     color: Color.muted
                     font.family: Style.font.family
                     font.pixelSize: Style.font.caption
@@ -1261,114 +1600,211 @@ Item {
                   }
                   Repeater {
                     model: root.hasSelection && Array.isArray(root.selectedWorld.checks) ? root.selectedWorld.checks : []
-                    delegate: RowLayout {
+                    delegate: ColumnLayout {
                       required property var modelData
                       Layout.fillWidth: true
-                      spacing: Style.spacing.sm
-                      Rectangle { width: Style.space(7); height: width; radius: width / 2; color: root.checkColor(modelData.status) }
-                      Text { textFormat: Text.PlainText;
+                      spacing: 0
+                      RowLayout {
                         Layout.fillWidth: true
-                        text: String(modelData.name || modelData.kind || "check") + (modelData.required ? "  [required]" : "")
-                        color: Color.foreground
-                        font.family: Style.font.family; font.pixelSize: Style.font.caption
+                        spacing: Style.spacing.sm
+                        Text { textFormat: Text.PlainText; text: Model.evidenceGlyph(Model.checkStatusLabel(modelData)); color: root.toneColor(Model.evidenceTone(Model.checkStatusLabel(modelData))); font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true }
+                        Text { textFormat: Text.PlainText; Layout.fillWidth: true; text: String(modelData.id || modelData.name || modelData.kind || "check") + (modelData.required ? "  [required]" : "  [optional]"); color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+                        Text { textFormat: Text.PlainText; text: Model.checkStatusLabel(modelData); color: root.toneColor(Model.evidenceTone(Model.checkStatusLabel(modelData))); font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true }
+                      }
+                      Text {
+                        textFormat: Text.PlainText
+                        visible: modelData.reason !== undefined && modelData.reason !== null && String(modelData.reason) !== ""
+                        Layout.fillWidth: true
+                        text: String(modelData.reason || "")
+                        color: Color.muted
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.caption
+                        wrapMode: Text.WordWrap
+                        maximumLineCount: 3
                         elide: Text.ElideRight
                       }
-                      Text { textFormat: Text.PlainText;
-                        text: String(modelData.status || "?")
-                        color: root.checkColor(modelData.status)
-                        font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true
+                      Text {
+                        textFormat: Text.PlainText
+                        visible: modelData.kind === "proofs" && modelData.total !== undefined
+                        text: "formal · " + Number(modelData.total || 0) + " obligations · " + Number(modelData.unproved || 0) + " unproved"
+                        color: Color.muted
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.caption
                       }
                     }
                   }
+                }
+
+                WlCard {
+                  visible: root.hasSelection
+                  title: "COLLAPSE GATES"
+                  Text {
+                    textFormat: Text.PlainText
+                    Layout.fillWidth: true
+                    text: root.hasSelection && Model.isTerminal(root.selectedWorld)
+                      ? "Conflicts and foreign contamination are computed against the CURRENT PRIME when a transaction is prepared (C). The world record itself carries " + (Array.isArray(root.selectedWorld.conflicts) ? root.selectedWorld.conflicts.length : 0) + " conflict(s) and " + (Array.isArray(root.selectedWorld.contamination) ? root.selectedWorld.contamination.length : 0) + " contamination entr" + ((Array.isArray(root.selectedWorld.contamination) ? root.selectedWorld.contamination.length : 0) === 1 ? "y" : "ies") + " from its own finalization."
+                      : "UNEVALUATED — the world is still running."
+                    color: Color.muted
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
+                  }
+                }
+
+                WlCard {
+                  visible: root.hasSelection && root.comparison.rows.length > 1
+                  title: "COMPARE — " + root.comparison.rows.length + " SIBLINGS"
                   Repeater {
-                    model: root.hasSelection && Array.isArray(root.selectedWorld.proofs) ? root.selectedWorld.proofs : []
+                    model: root.comparison.rows
                     delegate: RowLayout {
                       required property var modelData
                       Layout.fillWidth: true
-                      spacing: Style.spacing.sm
-                      Rectangle { width: Style.space(7); height: width; radius: width / 2; color: root.checkColor(modelData.status) }
-                      Text { textFormat: Text.PlainText;
-                        Layout.fillWidth: true
-                        text: "formal · " + Number(modelData.total || 0) + " obligations"
-                        color: Color.foreground
-                        font.family: Style.font.family; font.pixelSize: Style.font.caption
-                      }
-                      Text { textFormat: Text.PlainText;
-                        text: String(modelData.status || "?")
-                        color: root.checkColor(modelData.status)
-                        font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true
-                      }
+                      spacing: Style.spacing.xs
+                      Text { textFormat: Text.PlainText; text: modelData.alias === root.comparison.recommendation ? "★" : (modelData.isSelected ? "▸" : "·"); color: modelData.alias === root.comparison.recommendation ? Color.accent : Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
+                      Text { textFormat: Text.PlainText; Layout.fillWidth: true; text: modelData.alias; color: modelData.isSelected ? Color.accent : Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: modelData.isSelected; elide: Text.ElideRight
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.selectAlias(modelData.alias) } }
+                      Text { textFormat: Text.PlainText; text: modelData.state; color: root.toneColor(Model.stateTone(modelData.state)); font.family: Style.font.family; font.pixelSize: Style.font.caption }
+                      Text { textFormat: Text.PlainText; text: Model.evidenceGlyph(modelData.evidence) + " " + modelData.evidence; color: root.toneColor(Model.evidenceTone(modelData.evidence)); font.family: Style.font.family; font.pixelSize: Style.font.caption }
+                      Text { textFormat: Text.PlainText; text: "+" + modelData.delta.added + " ~" + modelData.delta.modified + " −" + modelData.delta.deleted; color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
+                      Text { textFormat: Text.PlainText; text: modelData.risk; color: root.toneColor(Model.riskTone(modelData.risk)); font.family: Style.font.family; font.pixelSize: Style.font.caption }
                     }
+                  }
+                  Text {
+                    textFormat: Text.PlainText
+                    Layout.fillWidth: true
+                    text: root.comparison.recommendation
+                      ? "★ " + root.comparison.recommendation + " — " + root.comparison.reason + ". A ranking, not a verdict: read the checks."
+                      : "no recommendation: " + root.comparison.reason
+                    color: Color.muted
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
                   }
                 }
 
-                Card {
-                  visible: root.hasSelection
-                  SectionTitle { text: "COLLAPSE GATES" }
-                  KV {
-                    k: "CONFLICTS"
-                    v: root.hasSelection && Array.isArray(root.selectedWorld.conflicts) ? String(root.selectedWorld.conflicts.length) : "0"
-                    vColor: root.hasSelection && Array.isArray(root.selectedWorld.conflicts) && root.selectedWorld.conflicts.length > 0 ? Color.urgent : Color.accent
+                WlCard {
+                  visible: root.hasSelection && !Model.isPrimeGeneration(root.selectedWorld)
+                  title: "AGENT LOG"
+                  hint: root.logLoading ? "loading…" : ""
+                  Text {
+                    textFormat: Text.PlainText
+                    visible: root.logText === "" || root.logWorld !== String(root.selectedWorld ? root.selectedWorld.instanceId : "")
+                    Layout.fillWidth: true
+                    text: "stderr tail from ~/.local/state/worldline/logs (L to load)"
+                    color: Color.muted
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
                   }
-                  KV {
-                    k: "CONTAMINATION"
-                    v: root.hasSelection && Array.isArray(root.selectedWorld.contamination) ? String(root.selectedWorld.contamination.length) : "0"
-                    vColor: root.hasSelection && Array.isArray(root.selectedWorld.contamination) && root.selectedWorld.contamination.length > 0 ? Color.urgent : Color.accent
-                  }
-                  Repeater {
-                    model: root.hasSelection && Array.isArray(root.selectedWorld.conflicts) ? root.selectedWorld.conflicts.slice(0, 4) : []
-                    delegate: Text { textFormat: Text.PlainText;
-                      required property var modelData
-                      Layout.fillWidth: true
-                      text: "⚠ " + root.fileLabel(modelData)
-                      color: Color.urgent
+                  Flickable {
+                    visible: root.logText !== "" && root.logWorld === String(root.selectedWorld ? root.selectedWorld.instanceId : "")
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Math.min(logBody.implicitHeight, Style.space(200))
+                    contentHeight: logBody.implicitHeight
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    Text {
+                      id: logBody
+                      textFormat: Text.PlainText
+                      width: parent.width
+                      text: root.logText
+                      color: Color.foreground
                       font.family: Style.font.family
                       font.pixelSize: Style.font.caption
-                      elide: Text.ElideLeft
+                      wrapMode: Text.WrapAnywhere
                     }
+                  }
+                  RowLayout {
+                    Layout.fillWidth: true
+                    Item { Layout.fillWidth: true }
+                    Button { text: "load tail (L)"; fontSize: Style.font.caption; enabled: !root.logLoading; onClicked: root.loadLog() }
                   }
                 }
 
-                RowLayout {
-                  Layout.fillWidth: true
-                  spacing: Style.spacing.sm
-                  Button {
+                // actions
+                WlCard {
+                  visible: root.hasSelection
+                  title: "ACTIONS"
+                  Flow {
                     Layout.fillWidth: true
-                    text: "RETURN"
-                    enabled: root.hasSelection
-                    onClicked: { root.actionKind = "return"; root.confirmationStep = 0; root.mode = "collapse" }
+                    spacing: Style.spacing.sm
+                    Button {
+                      visible: root.hasSelection && Model.isRunning(root.selectedWorld)
+                      text: "Cancel (X)"
+                      bordered: true
+                      enabled: root.live && root.selectedJob !== null
+                      tooltipText: root.selectedJob === null ? "no active job to cancel" : "stops the agent's transient unit; partial work stays inspectable, world finalizes DEGRADED"
+                      onClicked: root.cancelSelected()
+                    }
+                    Button {
+                      text: "Inspect (I)"
+                      bordered: true
+                      enabled: root.live
+                      tooltipText: "marks this world active for the bar and the alternate-world tint"
+                      onClicked: root.inspectSelected()
+                    }
+                    Button {
+                      visible: root.hasSelection && !Model.isPrimeGeneration(root.selectedWorld)
+                      text: "Switch (S)"
+                      bordered: true
+                      enabled: root.live
+                      tooltipText: "focuses the world's Hyprland workspace and opens a shell inside it"
+                      onClicked: root.switchSelected()
+                    }
+                    Button {
+                      text: "Return (R)"
+                      bordered: true
+                      enabled: root.hasSelection && Model.canReturnTo(root.selectedWorld) && (root.live || root.fixture)
+                      tooltipText: root.hasSelection && !Model.canReturnTo(root.selectedWorld) ? "needs an ARCHIVED, COLLAPSED, or VALID checkpoint" : "prepare a return to this checkpoint (review first)"
+                      onClicked: root.startCollapse("return")
+                    }
+                    Button {
+                      text: "Collapse (C)"
+                      bordered: true
+                      selected: root.hasSelection && Model.canCollapse(root.selectedWorld)
+                      enabled: root.hasSelection && Model.canCollapse(root.selectedWorld) && (root.live || root.fixture)
+                      tooltipText: root.hasSelection && !Model.canCollapse(root.selectedWorld) ? "only a VALID world can collapse — this one is " + String(root.selectedWorld.state) : "prepare a collapse into PRIME (review first)"
+                      onClicked: root.startCollapse("collapse")
+                    }
                   }
-                  Button {
+                  Text {
+                    textFormat: Text.PlainText
                     Layout.fillWidth: true
-                    text: "COLLAPSE"
-                    enabled: root.hasSelection && root.selectedWorld.state === "VALID"
-                    onClicked: { root.actionKind = "collapse"; root.confirmationStep = 0; root.mode = "collapse" }
+                    text: !root.live && !root.fixture
+                      ? "actions disabled: daemon signal is " + root.signalState
+                      : root.hasSelection && !Model.canCollapse(root.selectedWorld)
+                        ? "only VALID worlds can collapse — this one is " + String(root.selectedWorld.state) + (Model.isPrimeGeneration(root.selectedWorld) ? " (a PRIME generation; return to it instead)" : "")
+                        : "collapse opens a fresh prepared review; nothing is committed until the second confirmation"
+                    color: Color.muted
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
                   }
-                }
-                Text { textFormat: Text.PlainText;
-                  visible: root.hasSelection && root.selectedWorld.state !== "VALID"
-                  Layout.fillWidth: true
-                  text: "only VALID worlds can collapse — this one is " + (root.hasSelection ? String(root.selectedWorld.state || "?") : "")
-                  color: Color.muted
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.caption
-                  wrapMode: Text.WordWrap
                 }
               }
             }
           }
 
-          // ============ COLLAPSE MODE ============
-          CollapsePanel {
+          // help overlay
+          Rectangle {
             anchors.fill: parent
-            visible: root.mode === "collapse"
-            world: root.selectedWorld
-            receipt: root.selectedReceipt()
-            actionKind: root.actionKind
-            confirmationStep: root.confirmationStep
-            onRequestConfirm: root.confirmationStep = 1
-            onRequestExecute: root.executeSelection()
-            onRequestCancel: { root.mode = "multiverse"; root.confirmationStep = 0 }
+            visible: root.showHelp && root.mode === "multiverse"
+            color: Util.alpha(Color.background, 0.85)
+            MouseArea { anchors.fill: parent; onClicked: root.showHelp = false }
+            WlCard {
+              anchors.centerIn: parent
+              width: Math.min(parent.width - Style.space(40), Style.space(560))
+              title: "KEYS"
+              Text {
+                textFormat: Text.PlainText
+                Layout.fillWidth: true
+                text: "← → / h l   lineage (parent / child)\n↑ ↓ / k j   siblings\n⏎           collapse review (VALID) or inspect\nC / R       prepare collapse / return of the selection\nX           cancel the selected running world\nI / S       inspect (bar + tint) / switch workspace + shell\nL           load the agent's stderr tail\nF           fork or race     M   managed roots\nD           re-probe diagnostics     0   reset zoom\n?           this help          Esc  close\n\nIn the fork editor: M focuses the mission, T toggles single/race, Ctrl+Enter launches.\nOn the review screen: Enter opens the final confirmation, D toggles full hashes, Esc aborts."
+                color: Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+            }
           }
         }
 
@@ -1377,13 +1813,15 @@ Item {
         RowLayout {
           Layout.fillWidth: true
           spacing: Style.spacing.md
-          Text { textFormat: Text.PlainText;
-            text: root.worlds.length + " worlds · " + root.runningJobs() + " jobs running · daemon " + root.daemonAge()
+          Text {
+            textFormat: Text.PlainText
+            text: root.worlds.length + " worlds · " + root.runningJobs + " running · signal " + root.signalState + " " + Model.fmtAge(Model.daemonAgeMs(root.status, root.nowMs))
             color: Color.muted
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
           }
-          Text { textFormat: Text.PlainText;
+          Text {
+            textFormat: Text.PlainText
             visible: root.actionError !== ""
             Layout.fillWidth: true
             text: root.actionError
@@ -1392,15 +1830,42 @@ Item {
             font.pixelSize: Style.font.caption
             elide: Text.ElideRight
           }
-          Item { Layout.fillWidth: true; visible: root.actionError === "" }
-          Text { textFormat: Text.PlainText;
-            text: "← → lineage · ↑ ↓ siblings · ⏎ collapse · F fork · G graph · esc close"
+          Text {
+            textFormat: Text.PlainText
+            visible: root.actionError === "" && root.actionNotice !== ""
+            Layout.fillWidth: true
+            text: root.actionNotice
+            color: Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+          }
+          Item { Layout.fillWidth: true; visible: root.actionError === "" && root.actionNotice === "" }
+          Text {
+            textFormat: Text.PlainText
+            text: root.mode === "multiverse" ? "← → ↑ ↓ navigate · ⏎ review · F fork · M roots · C/R collapse/return · X cancel · L log · ? keys · esc close"
+              : root.mode === "fork" ? "M mission · T single/race · Ctrl+⏎ launch · esc back"
+              : root.mode === "collapse" ? "⏎ final confirmation · D hashes · esc abort"
+              : "⏎ dry run · esc back"
             color: Color.muted
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
           }
         }
       }
+    }
+
+    ConfirmDialog {
+      id: rootsConfirm
+      anchors.fill: parent
+      opened: root.rootsConfirmOpen
+      message: root.rootsConfirmKind === "remove"
+        ? "Remove " + (root.rootsPendingRemove ? String(root.rootsPendingRemove.roots[0].path) : "") + " from WORLDLINE? The current bytes are materialized back at that exact path and the live mapping is dropped."
+        : "Register " + root.rootsPath.trim() + "? The directory is moved into the managed store and replaced by a symlink at the same path."
+      cancelText: "Cancel"
+      confirmText: root.rootsConfirmKind === "remove" ? "Remove" : "Register"
+      onCanceled: { root.rootsConfirmOpen = false; keyCatcher.forceActiveFocus() }
+      onConfirmed: { if (root.rootsConfirmKind === "remove") root.rootsApplyRemove(); else root.rootsApply() }
     }
   }
 }
