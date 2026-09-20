@@ -104,6 +104,25 @@ Item {
 
   function focusMission() { missionEditor.forceActiveFocus() }
 
+  function reset() {
+    root.mission = ""
+    root.selectedAgent = ""
+    root.raceAgents = []
+    root.aliasText = ""
+    root.raceName = ""
+    root.failure = null
+  }
+
+  // A selection only means something for adapters the current probe reports AVAILABLE; drop
+  // anything else so a choice made against one daemon cannot be launched at another.
+  onAdaptersChanged: {
+    var available = {}
+    for (var i = 0; i < root.adapters.length; i++) if (root.adapters[i].state === "AVAILABLE") available[String(root.adapters[i].name)] = true
+    if (root.selectedAgent !== "" && !available[root.selectedAgent]) root.selectedAgent = ""
+    var kept = root.raceAgents.filter(function(name) { return available[name] === true })
+    if (kept.length !== root.raceAgents.length) root.raceAgents = kept
+  }
+
   function handleKey(event) {
     if (root.editing) {
       if (event.key === Qt.Key_Escape) { root.forceActiveFocus(); return true }

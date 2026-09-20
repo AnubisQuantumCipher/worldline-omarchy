@@ -121,6 +121,7 @@ Item {
     if (nextPath !== root.statusPath) {
       root.statusPath = nextPath; root.lastRaw = ""; root.status = null; root.statusLoadedOnce = false
       root.doctor = null; root.doctorError = ""; root.adapters = []; root.selectedIndex = -1; root.logText = ""
+      forkPanel.reset()
     }
     root.opened = true
     root.actionError = ""
@@ -453,7 +454,7 @@ Item {
   onBranchScaleChanged: if (root.opened) graphCanvas.requestPaint()
   onSiblingOpacityChanged: if (root.opened) graphCanvas.requestPaint()
   onSelectedIndexChanged: { if (root.opened) graphCanvas.requestPaint(); root.logText = ""; root.logWorld = "" }
-  onModeChanged: if (root.mode !== "fork") Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  onModeChanged: Qt.callLater(function() { keyCatcher.forceActiveFocus() })
 
   // ------------------------------------------------------------ the cockpit
 
@@ -492,7 +493,7 @@ Item {
         // multiverse mode
         if (event.key === Qt.Key_Escape) { if (root.showHelp) root.showHelp = false; else root.dismiss(); event.accepted = true; return }
         if (event.text === "?" || event.key === Qt.Key_F1) { root.showHelp = !root.showHelp; event.accepted = true; return }
-        if (event.key === Qt.Key_F || event.text === "f") { root.mode = "fork"; Qt.callLater(forkPanel.focusMission); event.accepted = true; return }
+        if (event.key === Qt.Key_F || event.text === "f") { root.mode = "fork"; event.accepted = true; return }
         if (event.text === "d" || event.text === "D") { root.refreshDoctor(true); event.accepted = true; return }
         if (event.text === "l" || event.text === "L") { root.loadLog(); event.accepted = true; return }
         if (event.text === "c" || event.text === "C") { root.startCollapse("collapse"); event.accepted = true; return }
@@ -580,8 +581,8 @@ Item {
               filled: true
             }
           }
-          Button { text: "Fork (F)"; bordered: true; enabled: root.mode !== "collapse"; onClicked: { root.mode = "fork"; Qt.callLater(forkPanel.focusMission) } }
-          Button { text: "Roots (M)"; bordered: true; enabled: root.mode !== "collapse"; onClicked: root.mode = "roots" }
+          Button { text: "Fork (F)"; bordered: true; enabled: root.mode !== "collapse"; opacity: enabled ? 1 : 0.4; onClicked: root.mode = "fork" }
+          Button { text: "Roots (M)"; bordered: true; enabled: root.mode !== "collapse"; opacity: enabled ? 1 : 0.4; onClicked: root.mode = "roots" }
           Button { text: "?"; bordered: true; onClicked: root.showHelp = !root.showHelp }
           Button { text: "×"; bordered: true; onClicked: root.dismiss() }
         }
@@ -604,7 +605,7 @@ Item {
             anchors.margins: Style.spacing.sm
             text: root.fixture
               ? "FIXTURE DATA from " + root.statusPath + " — nothing here is live and every consequential action is disabled."
-              : "ISOLATED HARNESS — status and every command address the private daemon at " + String(root.harness.runtimeDir) + ", not your real WORLDLINE."
+              : "ISOLATED HARNESS — status and every command address the private daemon at " + (root.harnessed ? String(root.harness.runtimeDir) : "") + ", not your real WORLDLINE."
             color: root.fixture ? Color.urgent : Color.accent
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
@@ -1379,7 +1380,8 @@ Item {
                       }
 
                       // evidence badge: filled accent PASS, filled urgent FAIL, hollow otherwise; glyph beside it
-                      var evidence = Model.evidence(world, stale).state
+                      var evidenceResult = Model.evidence(world, stale)
+                      var evidence = evidenceResult.state
                       var bx = item.x + radius * 0.85
                       var by = item.y - radius * 0.85
                       context.lineWidth = 1.4
@@ -1397,7 +1399,7 @@ Item {
                       var first = Model.shortAlias(world, root.status, root.primeLabel)
                       var second = String(world.agent || "—") + (files > 0 ? "  +" + files : "")
                       if (running) second = "▶ " + second
-                      var third = String(world.state || "") + " · " + evidence
+                      var third = String(world.state || "") + " · " + Model.evidenceLabel(evidenceResult)
                       var plateWidth = Math.max(context.measureText(first).width, context.measureText(second).width, context.measureText(third).width) + Style.space(10)
                       var plateTop = item.y + radius + Style.space(4)
                       var plateHeight = Style.space(42)
@@ -1505,7 +1507,7 @@ Item {
                     spacing: Style.spacing.xs
                     WlChip { label: root.hasSelection ? String(root.selectedWorld.state || "?") : ""; tone: Model.stateTone(root.hasSelection ? root.selectedWorld.state : ""); filled: true }
                     WlChip {
-                      label: "EVIDENCE " + root.selectedEvidence.state
+                      label: "EVIDENCE " + Model.evidenceLabel(root.selectedEvidence)
                       glyph: Model.evidenceGlyph(root.selectedEvidence.state)
                       tone: Model.evidenceTone(root.selectedEvidence.state)
                       tooltipText: root.selectedEvidence.detail

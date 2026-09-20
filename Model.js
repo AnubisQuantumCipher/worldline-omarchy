@@ -145,23 +145,32 @@ function bestRank(world) {
 // Evidence for one world, derived from its checks only. The lifecycle state is reported
 // separately. `stale` wins because retained data must never read as live proof.
 function evidence(world, stale) {
-  if (stale) return { state: "STALE", detail: "daemon heartbeat is stale; retained data" }
-  if (!world) return { state: "UNASSESSED", detail: "no world" }
+  if (stale) return { state: "STALE", detail: "daemon heartbeat is stale; retained data", gaps: 0 }
+  if (!world) return { state: "UNASSESSED", detail: "no world", gaps: 0 }
   var checks = Array.isArray(world.checks) ? world.checks : []
-  if (checks.length === 0) return { state: "UNASSESSED", detail: isRunning(world) ? "not finalized yet" : "no checks recorded" }
-  var required = 0, failed = 0, unavailable = 0, other = 0
+  if (checks.length === 0) return { state: "UNASSESSED", detail: isRunning(world) ? "not finalized yet" : "no checks recorded", gaps: 0 }
+  var required = 0, requiredFailed = 0, optionalFailed = 0, unavailable = 0, other = 0
   for (var i = 0; i < checks.length; i++) {
     var status = String(checks[i].status || "")
     if (checks[i].required) required++
     if (status === "PASS") continue
-    if (status === "FAIL") failed++
+    if (status === "FAIL") { if (checks[i].required) requiredFailed++; else optionalFailed++ }
     else if (status === "UNAVAILABLE") unavailable++
     else other++
   }
-  if (failed > 0) return { state: "FAIL", detail: failed + " of " + checks.length + " checks failed" }
-  if (unavailable > 0) return { state: "UNAVAILABLE", detail: unavailable + " check(s) could not run" }
-  if (other > 0) return { state: "UNASSESSED", detail: other + " check(s) not assessed" }
-  return { state: "PASS", detail: checks.length + " checks passed" + (required ? " (" + required + " required)" : "") }
+  // FAIL means a REQUIRED check failed (the engine's own bar for VALID). An optional failure
+  // is reported as a gap on a PASS, which is exactly what makes the engine's risk MEDIUM.
+  if (requiredFailed > 0) return { state: "FAIL", detail: requiredFailed + " required check" + (requiredFailed === 1 ? "" : "s") + " failed" + (optionalFailed ? ", " + optionalFailed + " optional" : ""), gaps: optionalFailed }
+  if (unavailable > 0) return { state: "UNAVAILABLE", detail: unavailable + " check(s) could not run", gaps: optionalFailed }
+  if (other > 0) return { state: "UNASSESSED", detail: other + " check(s) not assessed", gaps: optionalFailed }
+  var detail = (required ? required + " required" : "no required checks") + " passed"
+  if (optionalFailed > 0) detail += " · " + optionalFailed + " optional check" + (optionalFailed === 1 ? "" : "s") + " failed (risk stays MEDIUM)"
+  return { state: "PASS", detail: detail, gaps: optionalFailed }
+}
+
+function evidenceLabel(result) {
+  if (!result) return "UNASSESSED"
+  return result.state + (result.gaps > 0 && result.state === "PASS" ? " · " + result.gaps + " GAP" + (result.gaps === 1 ? "" : "S") : "")
 }
 
 function checkStatusLabel(check) {

@@ -109,7 +109,7 @@ BarWidget {
     BarIconButton {
       id: button
       bar: root.bar
-      text: ""   // nf-fa-globe
+      text: String.fromCodePoint(0xF0AC)   // nf-fa-globe; explicit so an editor cannot drop the private-use glyph
       slotSize: Style.bar.iconSlot
       fontSize: Style.bar.iconFont
       foreground: root.stateColor
