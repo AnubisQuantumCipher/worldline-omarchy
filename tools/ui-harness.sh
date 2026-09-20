@@ -6,6 +6,9 @@
 # daemon, with actions enabled and a banner saying so.
 #
 #   tools/ui-harness.sh start            # sets up, forks a VALID world, prints the payload
+#   tools/ui-harness.sh start --real     # same, but HOME stays real: the builtin adapters (claude,
+#                                        # codex, omp, pi) find their credentials and can be launched
+#                                        # for real; the store, socket, and root remain private
 #   tools/ui-harness.sh summon [mode]    # summon the cockpit onto the harness
 #   tools/ui-harness.sh slow             # fork a slow world (for cancel)
 #   tools/ui-harness.sh status           # status --json of the harness daemon
@@ -22,7 +25,7 @@ FIXTURE="$HERE/fixture_agent.py"
 SLOW="$HERE/slow_agent.py"
 
 harness_env() {
-  export HOME="$BASE/home"
+  if [[ -f $BASE/real-home ]]; then export HOME="$(cat "$BASE/real-home")"; else export HOME="$BASE/home"; fi
   export XDG_DATA_HOME="$BASE/data" XDG_STATE_HOME="$BASE/state"
   export XDG_CONFIG_HOME="$BASE/config" XDG_RUNTIME_DIR="$BASE/runtime"
   export PYTHONDONTWRITEBYTECODE=1
@@ -31,8 +34,13 @@ harness_env() {
 
 payload() {
   local mode="${1:-multiverse}"
-  printf '{"mode":"%s","harness":{"runtimeDir":"%s","home":"%s","dataHome":"%s","stateHome":"%s","configHome":"%s"}}' \
-    "$mode" "$BASE/runtime" "$BASE/home" "$BASE/data" "$BASE/state" "$BASE/config"
+  if [[ -f $BASE/real-home ]]; then
+    printf '{"mode":"%s","harness":{"runtimeDir":"%s","dataHome":"%s","stateHome":"%s","configHome":"%s"}}' \
+      "$mode" "$BASE/runtime" "$BASE/data" "$BASE/state" "$BASE/config"
+  else
+    printf '{"mode":"%s","harness":{"runtimeDir":"%s","home":"%s","dataHome":"%s","stateHome":"%s","configHome":"%s"}}' \
+      "$mode" "$BASE/runtime" "$BASE/home" "$BASE/data" "$BASE/state" "$BASE/config"
+  fi
 }
 
 case "${1:-}" in
@@ -41,9 +49,16 @@ case "${1:-}" in
     [[ -d $BASE ]] && { echo "harness: $BASE exists; run 'stop' first" >&2; exit 1; }
     mkdir -p "$BASE"/{home,data,state,config/worldline,runtime,root}
     chmod 700 "$BASE/config/worldline"
+    REAL_HOME="$HOME"
+    if [[ ${2:-} == --real ]]; then printf '%s\n' "$REAL_HOME" > "$BASE/real-home"; fi
     harness_env
-    printf '{"schemaVersion":1,"readonlyHomePaths":["%s"],"agentCommands":{"fixture":{"argv":["/usr/bin/python3","%s","{workspace}"],"credentialMounts":[],"eventFormat":"jsonl"},"slow":{"argv":["/usr/bin/python3","%s","{workspace}"],"credentialMounts":[],"eventFormat":"jsonl"}},"ghosts":{"enabled":false,"agent":null}}\n' \
-      "$HERE" "$FIXTURE" "$SLOW" > "$BASE/config/worldline/config.json"
+    if [[ -f $BASE/real-home ]]; then
+      RO="\"$HERE\",\"$REAL_HOME/.local/bin\",\"$REAL_HOME/.local/share/mise\",\"$REAL_HOME/.config/mise\",\"$REAL_HOME/opt/gnat\""
+    else
+      RO="\"$HERE\""
+    fi
+    printf '{"schemaVersion":1,"readonlyHomePaths":[%s],"agentCommands":{"fixture":{"argv":["/usr/bin/python3","%s","{workspace}"],"credentialMounts":[],"eventFormat":"jsonl"},"slow":{"argv":["/usr/bin/python3","%s","{workspace}"],"credentialMounts":[],"eventFormat":"jsonl"}},"ghosts":{"enabled":false,"agent":null}}\n' \
+      "$RO" "$FIXTURE" "$SLOW" > "$BASE/config/worldline/config.json"
     chmod 600 "$BASE/config/worldline/config.json"
     printf 'base line\n' > "$BASE/root/base.txt"
     printf 'second file\n' > "$BASE/root/notes.txt"
