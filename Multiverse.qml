@@ -68,6 +68,9 @@ Item {
   property real graphZoom: 1.0
   property real graphPanX: 0
   property real graphPanY: 0
+  // Until the operator zooms or pans, a generation wider than the viewport is fitted (zoomed out
+  // and centred) so nothing is born clipped; 0 returns to that automatic fit.
+  property bool graphAutoFit: true
   property real branchScale: 1.0
   property real siblingOpacity: 1.0
   property real pulsePhase: 0
@@ -502,7 +505,7 @@ Item {
         if (event.text === "i" || event.text === "I") { root.inspectSelected(); event.accepted = true; return }
         if (event.text === "s" || event.text === "S") { root.switchSelected(); event.accepted = true; return }
         if (event.text === "m" || event.text === "M") { root.mode = "roots"; event.accepted = true; return }
-        if (event.text === "0") { root.graphZoom = 1; root.graphPanX = 0; root.graphPanY = 0; graphCanvas.requestPaint(); event.accepted = true; return }
+        if (event.text === "0") { root.graphAutoFit = true; root.graphZoom = 1; root.graphPanX = 0; root.graphPanY = 0; graphCanvas.requestPaint(); event.accepted = true; return }
         if (event.key === Qt.Key_Left || event.text === "h") { root.selectedIndex = root.parentIndex(root.selectedIndex); event.accepted = true; return }
         if (event.key === Qt.Key_Right || event.text === "l") { root.selectedIndex = root.childIndex(root.selectedIndex); event.accepted = true; return }
         if (event.key === Qt.Key_Up || event.text === "k") { root.selectedIndex = root.siblingIndex(root.selectedIndex, -1); event.accepted = true; return }
@@ -1250,12 +1253,14 @@ Item {
                     // pans), and in a dense row adjacent labels alternate between two bands.
                     var minPitch = Style.space(112)
                     var denseBelow = Style.space(150)
+                    var widest = 0
                     for (var key in byDepth) {
                       var row = byDepth[key]
                       var count = row.length
                       var pitch = Math.max(graphViewport.width / (count + 1), minPitch)
                       var dense = pitch < denseBelow
                       var startX = graphViewport.width / 2 - (count - 1) * pitch / 2
+                      widest = Math.max(widest, (count - 1) * pitch + Style.space(150))
                       for (var j = 0; j < count; j++) {
                         out.push({
                           world: row[j],
@@ -1267,6 +1272,12 @@ Item {
                       }
                     }
                     layoutNodes = out
+                    if (root.graphAutoFit && graphViewport.width > 0) {
+                      var fit = Math.max(0.5, Math.min(1, graphViewport.width / Math.max(widest, 1)))
+                      root.graphZoom = fit
+                      root.graphPanX = graphViewport.width * (1 - fit) / 2
+                      root.graphPanY = 0
+                    }
                   }
 
                   function node(instanceId) {
@@ -1439,7 +1450,7 @@ Item {
                     if (!(mouse.buttons & Qt.LeftButton)) return
                     var dx = mouse.x - lastX
                     var dy = mouse.y - lastY
-                    if (Math.abs(dx) + Math.abs(dy) > 2) moved = true
+                    if (Math.abs(dx) + Math.abs(dy) > 2) { moved = true; root.graphAutoFit = false }
                     root.graphPanX += dx
                     root.graphPanY += dy
                     lastX = mouse.x
@@ -1463,6 +1474,7 @@ Item {
                   onDoubleClicked: function(mouse) { if (root.hasSelection) root.inspectSelected() }
                   onWheel: function(wheel) {
                     var next = Math.max(0.5, Math.min(2.2, root.graphZoom + (wheel.angleDelta.y > 0 ? 0.1 : -0.1)))
+                    root.graphAutoFit = false
                     root.graphZoom = next
                     graphCanvas.requestPaint()
                     wheel.accepted = true
