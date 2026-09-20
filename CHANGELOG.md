@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.1 — 2026-09-20 · dense generations, real-credential harness
+
+- **Graph: a generation with many siblings overprinted its labels.** Eight worlds in one
+  generation (a race plus forks — the private real-agent harness produced exactly this) were
+  squeezed into the viewport until every label plate covered its neighbour's. Columns now keep
+  a minimum pitch (the row grows past the viewport and pans) and adjacent labels in a dense row
+  alternate between two bands.
+- **tools/ui-harness.sh `start --real`**: private store, socket, and root, but the real `$HOME`,
+  so the builtin adapters find their credentials; used to run claude, codex, omp, and pi for
+  real, a real three-lane race, and a cockpit-driven real fork (`claude-1`, VALID).
+- **tools/test-model.mjs**: node tests for the pure Model.js helpers (10).
+- Adapter cards show the engine's `UNAVAILABLE` reason verbatim (pi: "no provider credentials
+  … run `pi login`"), which the 1.1.1 engine now reports before any world is created.
+
 All notable changes to the WORLDLINE Omarchy plugin are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 

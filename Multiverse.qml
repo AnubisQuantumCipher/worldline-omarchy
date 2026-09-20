@@ -1244,14 +1244,25 @@ Item {
                     }
                     var out = []
                     var rowGap = Style.space(130)
+                    // A generation with many siblings (a race plus a few forks is eight) used to
+                    // squeeze them into the viewport until their label plates overprinted each
+                    // other. Columns now keep a minimum pitch (the row grows past the viewport and
+                    // pans), and in a dense row adjacent labels alternate between two bands.
+                    var minPitch = Style.space(112)
+                    var denseBelow = Style.space(150)
                     for (var key in byDepth) {
                       var row = byDepth[key]
-                      for (var j = 0; j < row.length; j++) {
+                      var count = row.length
+                      var pitch = Math.max(graphViewport.width / (count + 1), minPitch)
+                      var dense = pitch < denseBelow
+                      var startX = graphViewport.width / 2 - (count - 1) * pitch / 2
+                      for (var j = 0; j < count; j++) {
                         out.push({
                           world: row[j],
                           depth: Number(key),
-                          x: (j + 1) * graphViewport.width / (row.length + 1),
-                          y: Style.space(64) + Number(key) * rowGap
+                          x: startX + j * pitch,
+                          y: Style.space(64) + Number(key) * rowGap,
+                          band: dense ? (j % 2) : 0
                         })
                       }
                     }
@@ -1401,16 +1412,17 @@ Item {
                       if (running) second = "▶ " + second
                       var third = String(world.state || "") + " · " + Model.evidenceLabel(evidenceResult)
                       var plateWidth = Math.max(context.measureText(first).width, context.measureText(second).width, context.measureText(third).width) + Style.space(10)
-                      var plateTop = item.y + radius + Style.space(4)
+                      var bandOffset = (item.band || 0) * Style.space(46)
+                      var plateTop = item.y + radius + Style.space(4) + bandOffset
                       var plateHeight = Style.space(42)
                       context.fillStyle = Util.alpha(Color.background, 0.82)
                       context.fillRect(item.x - plateWidth / 2, plateTop, plateWidth, plateHeight)
                       context.fillStyle = pathActive ? Color.foreground : Color.muted
-                      context.fillText(first, item.x, item.y + radius + Style.space(15))
+                      context.fillText(first, item.x, item.y + radius + Style.space(15) + bandOffset)
                       context.fillStyle = Color.muted
-                      context.fillText(second, item.x, item.y + radius + Style.space(28))
+                      context.fillText(second, item.x, item.y + radius + Style.space(28) + bandOffset)
                       context.fillStyle = evidence === "PASS" ? Color.accent : evidence === "FAIL" ? Color.urgent : Color.muted
-                      context.fillText(third, item.x, item.y + radius + Style.space(41))
+                      context.fillText(third, item.x, item.y + radius + Style.space(41) + bandOffset)
                     }
                     context.restore()
                   }
