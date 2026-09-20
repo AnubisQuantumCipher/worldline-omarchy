@@ -3,6 +3,60 @@
 All notable changes to the WORLDLINE Omarchy plugin are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## [1.2.0] — 2026-09-20
+
+Mission control, rebuilt around the engine's prepared-transaction contract (engine ≥ 1.1.0).
+Every screen was driven with real key input against a live daemon and an isolated harness
+daemon and inspected as rendered; the shell log is clean of QML errors and binding loops.
+
+### Fixed
+- **Collapse and return used to run `--yes` after a confirmation step that reviewed nothing
+  fresh.** The review panel showed retained world fields, and its "Conflicts" line read the
+  receipt's non-existent `conflicts` key through a truthy empty object, so missing evidence
+  rendered as `0`. The panel now runs `worldline collapse|return --prepare --json`, renders
+  exactly what came back (kernel decision, transaction id, before/candidate/staged roots,
+  managed roots, every operation, evaluated conflicts and contamination, dependency changes),
+  asks for a second confirmation in the shell's native dialog, and commits **that transaction
+  id** with `worldline transaction commit`. Escape, Cancel, or closing the cockpit aborts it.
+  A change to PRIME between review and commit is refused by the daemon and shown as
+  `PRIME_CHANGED_AFTER_PREPARE`; a conflict is shown as `DENIED — NOTHING WAS WRITTEN` with the
+  diverged paths.
+- **Typing in the mission editor could switch modes.** The key handler was a sibling of the UI
+  tree, so a focused editor never handed it Escape, and mode keys were gated wrongly. The
+  handler now owns the tree; editors intercept Escape and Ctrl+Enter themselves.
+- **The bar tinted the globe by proof-kind checks only** while the cockpit judged all checks.
+  Both now derive one evidence state in `Model.js`.
+- Installed copies had drifted from source (the engine repository shipped a 1.0 snapshot that
+  its installer copied over this plugin). The plugin is now deployed only as a git checkout.
+
+### Added
+- **Fork editor**: single fork with an explicit adapter (number keys 1–9 or click) and alias,
+  or a deliberate three-adapter race with an optional lane prefix (`--name`). Each adapter shows
+  its probe state and the reason it is unavailable. Spend is stated before launch.
+- **Cancel** for a running world (`worldline cancel`), from the inspector or the JOBS card.
+- **Diagnostics card** from `worldline doctor`: managed-root, store, receipt, recovery and
+  supervision integrity, open transactions with an abort button, capabilities on demand.
+- **Inspector**: evidence per check with the required flag and reason, full delta list, a
+  sibling comparison ranked like `pick_candidate.py` (refuses to recommend without evidence),
+  agent stderr tail, identities behind a disclosure, mission expander.
+- **First run and managed roots** (`M`): guidance, registered roots with integrity, dry-run
+  add/remove with the exact facts and a native confirmation.
+- **Evidence vocabulary** distinct from lifecycle: `PASS` (with `· N GAP` when optional checks
+  failed), `FAIL` (a required check failed), `UNASSESSED`, `UNAVAILABLE`, `STALE`. Lifecycle
+  states are shown beside it, never instead of it.
+- **States**: NO SIGNAL (daemon offline), SIGNAL STALE (heartbeat > 10 s, actions disabled),
+  NO PRIME, running (dashed ring, pulse when motion is on, header count), refusal, recovery.
+- **Test seams**: summon with `{"fixture": true, "statusPath": …}` to render any status
+  document with every consequential action disabled, or `{"harness": {…}}` to point the
+  status file *and* every CLI call at an isolated daemon (`tools/ui-harness.sh`).
+- Keyboard: `← → ↑ ↓ / h j k l`, `⏎`, `C`, `R`, `X`, `I`, `S`, `L`, `F`, `M`, `D`, `0`, `?`.
+- Bar: running-job count badge; tooltip carries alias / agent / delta / evidence / lifecycle.
+
+### Changed
+- Status polling: the bar reloads every 2 s and skips parsing unchanged bytes; the service
+  every 5 s; the cockpit only while open.
+- `manifest.json` 1.2.0; new files `Model.js`, `ForkPanel.qml`, `Wl*.qml`, `tools/`.
+
 ## [1.1.1] — 2026-09-02
 
 Honest surfaces. Found by an adversarial audit of the plugin against the engine
@@ -21,73 +75,21 @@ it renders; every item was verified against the runtime source.
   runtime never writes (they are empty at construction and assigned nowhere);
   the real values exist only in the transaction record and receipt. Before a
   collapse they now read `UNEVALUATED — computed at collapse.prepare` and `—`.
-  The gate itself always ran server-side — this was misinformation at the
-  decision point, and it contradicted CONTRIBUTING's "never invent a count, a
-  hash, or a proof state the status file didn't provide".
 - **Delta file lists were unreadable.** The label looked for `path`/`file`, but
-  delta operations carry `pathDisplay`, so the operator saw a left-truncated
-  JSON blob instead of `src/main.py`.
-- **Job failures rendered as `[object Object]`.** Every writer passes a
-  structured error; the JOBS card is the one place the cockpit says why a world
-  died.
-- **A world alias beginning with `-` retargeted `worldline return`.** The
-  command is built as an argv array, so there was no injection, but argparse
-  parsed the alias as an option and `return` then selected PRIME's parent.
-  `return` and `collapse` now pass `--` before the alias.
+  delta operations carry `pathDisplay`.
+- **Job failures rendered as `[object Object]`.**
+- **A world alias beginning with `-` retargeted `worldline return`.** `return`
+  and `collapse` now pass `--` before the alias.
 - **A check whose status was neither PASS nor FAIL** (e.g. `UNAVAILABLE`) was
   rounded up to a filled green PASS badge; it now reports `UNASSESSED`.
 
 ## [1.1.0] — 2026-08-29
 
-Mission-control overlay.
-
-### Added
-- The full-screen overlay is now an information-rich cockpit: header chips for
-  daemon state (goes `STALE` when the heartbeat is >10 s old), `PRIME`
-  (+`DIRTY` flag), active world, and storage backend; a left rail with
-  REALITY (managed roots), LAST COLLAPSE (receipt id, `renameat2` mechanism,
-  invariant-preservation state and check count, non-claims count), CENSUS,
-  JOBS, CAPABILITIES (each probe with its honest `UNAVAILABLE` reason), and
-  ADAPTERS (live `worldline adapters --json` probe); and a right inspector
-  with risk/complexity chips labeled as derived, delta breakdown with file
-  paths, per-check evidence (or the honest `UNASSESSED` line), collapse
-  gates (conflicts/contamination), and a live-ticking lifetime.
-- Graph: generation guide lines, node radius scaled by delta size, a
-  double ring on `PRIME`, selection halo, and a per-node evidence badge
-  (filled `PASS` / red `FAIL` / hollow `UNASSESSED`).
-- Keyboard: `F` opens the fork editor, `G` returns to the graph; footer shows
-  the full keymap plus worlds/jobs/daemon-age status.
-- Fork editor now targets the first three `AVAILABLE` adapters instead of a
-  hardcoded trio, and states the ~3× race spend up front.
-
-### Fixed
-- `invariantPreservation` renders its state and check count instead of
-  `[object Object]`.
-- The graph legend wraps (`Flow`) so its minimum width can no longer push the
-  inspector rail off-screen.
+Mission-control overlay: header chips, left rail (REALITY, LAST COLLAPSE, CENSUS, JOBS,
+CAPABILITIES, ADAPTERS), right inspector, graph with generation guides and evidence badges,
+keyboard navigation, fork editor targeting the first three AVAILABLE adapters.
 
 ## [1.0.0] — 2026-08-29
 
-First public release.
-
-### Added
-- Bar widget: a single **globe** glyph rendered via `BarIconButton`, sized to the
-  bar's native icon slot and colored by the active reality's proof state, with
-  the full reality · agent · delta · proof line in the hover tooltip.
-- Multiverse overlay: a pan/zoom/keyboard-navigable fork graph with
-  **state-colored nodes** (green live/selected, red `DEGRADED`/`DEAD`, grey
-  archived/collapsed) and a per-world inspector (parent, cause, agent, delta,
-  checks, formal obligations, ancestor integrity, hash, descendants).
-- Fork editor: write one mission and launch a three-agent race
-  (`worldline race`) against a frozen reality.
-- Collapse / return review: a two-step confirmation panel showing base,
-  candidate delta, conflicts, contamination, and invariant-preservation state
-  before anything touches `PRIME`.
-- Alternate-world tint and "a better future was found" notifications.
-- `install.sh`: idempotent installer (copies the plugin, enables the bar widget
-  in `shell.json`, binds `SUPER+CTRL+W` / `SUPER+SHIFT+W`, restarts the shell).
-
-### Notes
-- The inspector title and hash now elide/shorten so long UUIDs and digests never
-  overflow the panel; graph labels are shortened so they no longer collide.
-- All colors, fonts, and spacing derive from Omarchy's shared theme tokens.
+First public release: bar globe, multiverse overlay, fork editor (three-agent race),
+two-step collapse/return panel, alternate-world tint, idempotent installer.
