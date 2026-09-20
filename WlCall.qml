@@ -11,6 +11,9 @@ Item {
   readonly property bool busy: process.running
   property var _done: null
   property string lastCommand: ""
+  // Extra environment for the CLI. The isolated-daemon harness sets HOME/XDG_* here so every
+  // command addresses the private daemon instead of the operator's real one.
+  property var environment: ({})
 
   function run(argv, done) {
     if (process.running) return false
@@ -24,6 +27,7 @@ Item {
   Process {
     id: process
     running: false
+    environment: root.environment
     stdout: StdioCollector { id: out; waitForEnd: true }
     stderr: StdioCollector { id: err; waitForEnd: true }
     onExited: function(exitCode, exitStatus) {

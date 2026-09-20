@@ -18,6 +18,7 @@ Item {
   property bool initialized: false
   property string signalState: "live"
   property bool fixture: false
+  property var cliEnvironment: ({})
   property string primeLabel: "PRIME"
   property bool adaptersLoading: false
 
@@ -116,7 +117,7 @@ Item {
     return false
   }
 
-  WlCall { id: launchCall }
+  WlCall { id: launchCall; environment: root.cliEnvironment }
 
   ColumnLayout {
     anchors.fill: parent

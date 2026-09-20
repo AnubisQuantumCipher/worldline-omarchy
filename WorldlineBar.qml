@@ -40,6 +40,7 @@ BarWidget {
     if (stale) line += "  · signal " + signalState
     return line
   }
+  readonly property color barForeground: bar ? bar.barForeground : Color.foreground
   readonly property color stateColor: {
     if (stale || !initialized) return Color.muted
     if (evidence.state === "PASS") return barForeground

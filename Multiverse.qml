@@ -41,6 +41,20 @@ Item {
   property string lastCommittedReceipt: ""
   property string primeLabel: "PRIME"
   property bool fixture: false
+  // Isolated-daemon harness: {"harness": {"runtimeDir": …, "home": …, "dataHome": …, "stateHome": …, "configHome": …}}
+  // routes the status file AND every CLI call at a private daemon, with actions enabled.
+  property var harness: null
+  readonly property bool harnessed: harness !== null
+  readonly property var cliEnvironment: {
+    if (!root.harnessed) return ({})
+    var env = {}
+    if (root.harness.home) env["HOME"] = String(root.harness.home)
+    if (root.harness.dataHome) env["XDG_DATA_HOME"] = String(root.harness.dataHome)
+    if (root.harness.stateHome) env["XDG_STATE_HOME"] = String(root.harness.stateHome)
+    if (root.harness.configHome) env["XDG_CONFIG_HOME"] = String(root.harness.configHome)
+    if (root.harness.runtimeDir) env["XDG_RUNTIME_DIR"] = String(root.harness.runtimeDir)
+    return env
+  }
   readonly property string defaultStatusPath: Quickshell.env("XDG_RUNTIME_DIR") + "/worldline/status.json"
   property string statusPath: defaultStatusPath
   property string logText: ""
@@ -87,7 +101,7 @@ Item {
   readonly property var integrity: Model.integrityRows(doctor)
   readonly property var openTransactions: Model.openTransactions(doctor)
   readonly property bool integrityUrgent: integrity.some(function(row) { return row.urgent }) || openTransactions.length > 0
-  readonly property string stateHome: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state"))
+  readonly property string stateHome: root.harnessed && root.harness.stateHome ? String(root.harness.stateHome) : (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state"))
   readonly property bool editing: (mode === "fork" && forkPanel.editing) || (mode === "roots" && rootsPathField.activeFocus)
 
   // ------------------------------------------------------------ lifecycle
@@ -100,7 +114,10 @@ Item {
     root.mode = ["fork", "multiverse", "collapse", "roots"].indexOf(requested) >= 0 ? requested : "multiverse"
     if (root.mode === "collapse") root.mode = "multiverse"   // collapse is entered from a selection, never cold
     root.fixture = payload.fixture === true
-    var nextPath = root.fixture && typeof payload.statusPath === "string" && payload.statusPath !== "" ? String(payload.statusPath) : root.defaultStatusPath
+    root.harness = payload.harness && typeof payload.harness === "object" && payload.harness.runtimeDir ? payload.harness : null
+    var nextPath = root.fixture && typeof payload.statusPath === "string" && payload.statusPath !== "" ? String(payload.statusPath)
+      : root.harnessed ? String(root.harness.runtimeDir) + "/worldline/status.json"
+      : root.defaultStatusPath
     if (nextPath !== root.statusPath) { root.statusPath = nextPath; root.lastRaw = ""; root.status = null; root.statusLoadedOnce = false }
     root.opened = true
     root.actionError = ""
@@ -371,11 +388,11 @@ Item {
 
   // ------------------------------------------------------------ plumbing
 
-  WlCall { id: adaptersCall }
-  WlCall { id: doctorCall }
-  WlCall { id: actionCall }
-  WlCall { id: logCall }
-  WlCall { id: rootsCall }
+  WlCall { id: adaptersCall; environment: root.cliEnvironment }
+  WlCall { id: doctorCall; environment: root.cliEnvironment }
+  WlCall { id: actionCall; environment: root.cliEnvironment }
+  WlCall { id: logCall; environment: root.cliEnvironment }
+  WlCall { id: rootsCall; environment: root.cliEnvironment }
 
   FileView {
     id: statusFile
@@ -528,12 +545,10 @@ Item {
             }
           }
           Item { Layout.fillWidth: true }
-          Flow {
-            Layout.maximumWidth: panel.width * 0.6
+          RowLayout {
             spacing: Style.spacing.sm
-            layoutDirection: Qt.RightToLeft
             WlChip {
-              label: root.fixture ? "FIXTURE DATA" : (root.signalState === "live" ? "SIGNAL LIVE · v" + String(root.status.daemon.version || "?") : root.signalState === "stale" ? "SIGNAL STALE · " + Model.fmtAge(Model.daemonAgeMs(root.status, root.nowMs)) : "NO SIGNAL")
+              label: root.fixture ? "FIXTURE DATA" : root.harnessed && root.signalState === "live" ? "HARNESS LIVE" : (root.signalState === "live" ? "SIGNAL LIVE · v" + String(root.status.daemon.version || "?") : root.signalState === "stale" ? "SIGNAL STALE · " + Model.fmtAge(Model.daemonAgeMs(root.status, root.nowMs)) : "NO SIGNAL")
               glyph: root.fixture ? "⚗" : root.signalState === "live" ? "●" : root.signalState === "stale" ? "◐" : "○"
               tone: root.fixture ? "foreground" : root.signalState === "live" ? "accent" : "urgent"
               filled: root.signalState !== "live"
@@ -571,13 +586,13 @@ Item {
 
         Rectangle { Layout.fillWidth: true; height: 1; color: Util.alpha(Color.muted, 0.5) }
 
-        // fixture banner
+        // fixture / harness banner
         Rectangle {
           Layout.fillWidth: true
-          visible: root.fixture
+          visible: root.fixture || root.harnessed
           implicitHeight: fixtureText.implicitHeight + Style.spacing.md
-          color: Util.alpha(Color.urgent, 0.10)
-          border.color: Util.alpha(Color.urgent, 0.5)
+          color: Util.alpha(root.fixture ? Color.urgent : Color.accent, 0.10)
+          border.color: Util.alpha(root.fixture ? Color.urgent : Color.accent, 0.5)
           border.width: 1
           radius: Style.cornerRadius
           Text {
@@ -585,8 +600,10 @@ Item {
             textFormat: Text.PlainText
             anchors.fill: parent
             anchors.margins: Style.spacing.sm
-            text: "FIXTURE DATA from " + root.statusPath + " — nothing here is live and every consequential action is disabled."
-            color: Color.urgent
+            text: root.fixture
+              ? "FIXTURE DATA from " + root.statusPath + " — nothing here is live and every consequential action is disabled."
+              : "ISOLATED HARNESS — status and every command address the private daemon at " + String(root.harness.runtimeDir) + ", not your real WORLDLINE."
+            color: root.fixture ? Color.urgent : Color.accent
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
             elide: Text.ElideMiddle
@@ -610,6 +627,7 @@ Item {
             signalState: root.signalState
             fixture: root.fixture
             primeLabel: root.primeLabel
+            cliEnvironment: root.cliEnvironment
             onBack: root.mode = "multiverse"
             onRequestFocus: keyCatcher.forceActiveFocus()
             onRefreshAdapters: root.refreshAdapters(true)
@@ -632,6 +650,7 @@ Item {
             signalState: root.signalState
             fixture: root.fixture
             primeLabel: root.primeLabel
+            cliEnvironment: root.cliEnvironment
             onRequestFocus: keyCatcher.forceActiveFocus()
             onCancelled: {
               if (root.pendingDismiss) { root.finishDismiss(); return }
@@ -949,7 +968,9 @@ Item {
                     v: {
                       if (!root.receipt) return "—"
                       var w = Model.worldByContent(root.worlds, root.receipt.candidateWorld)
-                      return w ? Model.shortAlias(w, root.status, root.primeLabel) : Model.shortHash(root.receipt.candidateWorld)
+                      if (!w) return Model.shortHash(root.receipt.candidateWorld)
+                      var isPrime = root.status && root.status.prime && w.instanceId === root.status.prime.instanceId
+                      return String(w.alias) + (isPrime ? "  (now " + root.primeLabel + ")" : "")
                     }
                   }
                   WlKV { k: "MERGE SET"; v: root.receipt && root.receipt.mergeSet ? (root.receipt.mergeSet.files || []).length + " files · " + (root.receipt.mergeSet.generatedArtifacts || []).length + " generated · " + (root.receipt.mergeSet.dependencyChanges || []).length + " dep changes" : "—" }
@@ -988,7 +1009,7 @@ Item {
                         Text {
                           textFormat: Text.PlainText
                           Layout.fillWidth: true
-                          text: jobRow.jobWorld ? Model.shortAlias(jobRow.jobWorld, root.status, root.primeLabel) : Model.shortId(modelData.world, 8)
+                          text: jobRow.jobWorld ? String(jobRow.jobWorld.alias) + (root.status && root.status.prime && jobRow.jobWorld.instanceId === root.status.prime.instanceId ? " ★" : "") : Model.shortId(modelData.world, 8)
                           color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.font.caption; elide: Text.ElideRight
                         }
                         Text { textFormat: Text.PlainText; text: Model.fmtDuration(modelData.started, modelData.ended, root.nowMs); color: Color.muted; font.family: Style.font.family; font.pixelSize: Style.font.caption }
@@ -1214,7 +1235,7 @@ Item {
                       byDepth[d].push(root.worlds[i])
                     }
                     var out = []
-                    var rowGap = Style.space(118)
+                    var rowGap = Style.space(130)
                     for (var key in byDepth) {
                       var row = byDepth[key]
                       for (var j = 0; j < row.length; j++) {
@@ -1264,7 +1285,7 @@ Item {
                     for (var g = 0; g < layoutNodes.length; g++) maxDepth = Math.max(maxDepth, layoutNodes[g].depth)
                     context.lineWidth = 1
                     for (var gd = 0; gd <= maxDepth; gd++) {
-                      var gy = Style.space(64) + gd * Style.space(118)
+                      var gy = Style.space(64) + gd * Style.space(130)
                       context.globalAlpha = 0.10
                       context.strokeStyle = Color.muted
                       context.beginPath()
@@ -1361,17 +1382,26 @@ Item {
                       else if (evidence === "FAIL") { context.fillStyle = Color.urgent; context.fill() }
                       else { context.fillStyle = Color.background; context.fill(); context.strokeStyle = Color.muted; context.stroke() }
 
+                      // Labels sit on a translucent plate so the edges passing beneath a
+                      // generation row never make them illegible.
                       context.font = Style.font.caption + "px " + Style.font.family
                       context.textAlign = "center"
-                      context.fillStyle = pathActive ? Color.foreground : Color.muted
-                      context.fillText(Model.shortAlias(world, root.status, root.primeLabel), item.x, item.y + radius + Style.space(14))
-                      context.fillStyle = Color.muted
                       var files = Model.deltaCount(world)
+                      var first = Model.shortAlias(world, root.status, root.primeLabel)
                       var second = String(world.agent || "—") + (files > 0 ? "  +" + files : "")
                       if (running) second = "▶ " + second
-                      context.fillText(second, item.x, item.y + radius + Style.space(27))
+                      var third = String(world.state || "") + " · " + evidence
+                      var plateWidth = Math.max(context.measureText(first).width, context.measureText(second).width, context.measureText(third).width) + Style.space(10)
+                      var plateTop = item.y + radius + Style.space(4)
+                      var plateHeight = Style.space(42)
+                      context.fillStyle = Util.alpha(Color.background, 0.82)
+                      context.fillRect(item.x - plateWidth / 2, plateTop, plateWidth, plateHeight)
+                      context.fillStyle = pathActive ? Color.foreground : Color.muted
+                      context.fillText(first, item.x, item.y + radius + Style.space(15))
+                      context.fillStyle = Color.muted
+                      context.fillText(second, item.x, item.y + radius + Style.space(28))
                       context.fillStyle = evidence === "PASS" ? Color.accent : evidence === "FAIL" ? Color.urgent : Color.muted
-                      context.fillText(String(world.state || "") + " · " + evidence, item.x, item.y + radius + Style.space(40))
+                      context.fillText(third, item.x, item.y + radius + Style.space(41))
                     }
                     context.restore()
                   }

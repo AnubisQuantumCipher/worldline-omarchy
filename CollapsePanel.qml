@@ -23,6 +23,7 @@ Item {
   property string actionKind: "collapse"        // "collapse" | "return"
   property string signalState: "live"           // live | stale | offline
   property bool fixture: false                  // test seam: never execute
+  property var cliEnvironment: ({})
   property string primeLabel: "PRIME"
 
   // phase: idle | preparing | review | committing | committed | denied | error | aborting
@@ -135,9 +136,9 @@ Item {
     return false
   }
 
-  WlCall { id: prepareCall }
-  WlCall { id: commitCall }
-  WlCall { id: abortCall }
+  WlCall { id: prepareCall; environment: root.cliEnvironment }
+  WlCall { id: commitCall; environment: root.cliEnvironment }
+  WlCall { id: abortCall; environment: root.cliEnvironment }
 
   readonly property var operations: root.facts && root.facts.delta && Array.isArray(root.facts.delta.operations) ? root.facts.delta.operations : []
   readonly property var conflicts: root.facts && Array.isArray(root.facts.conflicts) ? root.facts.conflicts
