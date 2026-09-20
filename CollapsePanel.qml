@@ -544,6 +544,7 @@ Item {
       Button {
         visible: root.prepared
         text: root.actionKind === "return" ? "Reviewed — return to " + root.alias : "Reviewed — collapse " + root.alias
+        opacity: enabled ? 1 : 0.4
         bordered: true
         selected: root.canCommit
         enabled: root.canCommit

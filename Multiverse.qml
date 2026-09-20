@@ -118,7 +118,10 @@ Item {
     var nextPath = root.fixture && typeof payload.statusPath === "string" && payload.statusPath !== "" ? String(payload.statusPath)
       : root.harnessed ? String(root.harness.runtimeDir) + "/worldline/status.json"
       : root.defaultStatusPath
-    if (nextPath !== root.statusPath) { root.statusPath = nextPath; root.lastRaw = ""; root.status = null; root.statusLoadedOnce = false }
+    if (nextPath !== root.statusPath) {
+      root.statusPath = nextPath; root.lastRaw = ""; root.status = null; root.statusLoadedOnce = false
+      root.doctor = null; root.doctorError = ""; root.adapters = []; root.selectedIndex = -1; root.logText = ""
+    }
     root.opened = true
     root.actionError = ""
     root.actionNotice = ""
@@ -509,7 +512,6 @@ Item {
           event.accepted = true
         }
       }
-    }
 
     Rectangle {
       anchors.fill: parent
@@ -790,6 +792,11 @@ Item {
                   TextField {
                     id: rootsPathField
                     Layout.fillWidth: true
+                    Keys.priority: Keys.BeforeItem
+                    Keys.onPressed: function(event) {
+                      if (event.key === Qt.Key_Escape) { keyCatcher.forceActiveFocus(); event.accepted = true }
+                      else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { root.rootsPreview(); event.accepted = true }
+                    }
                     placeholderText: "/home/you/Projects/your-project   (absolute path, a real directory, not a symlink)"
                     text: root.rootsPath
                     onTextEdited: { root.rootsPath = text; root.rootsDryRun = null }
@@ -1761,6 +1768,7 @@ Item {
                     Button {
                       visible: root.hasSelection && Model.isRunning(root.selectedWorld)
                       text: "Cancel (X)"
+                      opacity: enabled ? 1 : 0.4
                       bordered: true
                       enabled: root.live && root.selectedJob !== null
                       tooltipText: root.selectedJob === null ? "no active job to cancel" : "stops the agent's transient unit; partial work stays inspectable, world finalizes DEGRADED"
@@ -1768,6 +1776,7 @@ Item {
                     }
                     Button {
                       text: "Inspect (I)"
+                      opacity: enabled ? 1 : 0.4
                       bordered: true
                       enabled: root.live
                       tooltipText: "marks this world active for the bar and the alternate-world tint"
@@ -1776,6 +1785,7 @@ Item {
                     Button {
                       visible: root.hasSelection && !Model.isPrimeGeneration(root.selectedWorld)
                       text: "Switch (S)"
+                      opacity: enabled ? 1 : 0.4
                       bordered: true
                       enabled: root.live
                       tooltipText: "focuses the world's Hyprland workspace and opens a shell inside it"
@@ -1783,6 +1793,7 @@ Item {
                     }
                     Button {
                       text: "Return (R)"
+                      opacity: enabled ? 1 : 0.4
                       bordered: true
                       enabled: root.hasSelection && Model.canReturnTo(root.selectedWorld) && (root.live || root.fixture)
                       tooltipText: root.hasSelection && !Model.canReturnTo(root.selectedWorld) ? "needs an ARCHIVED, COLLAPSED, or VALID checkpoint" : "prepare a return to this checkpoint (review first)"
@@ -1790,6 +1801,7 @@ Item {
                     }
                     Button {
                       text: "Collapse (C)"
+                      opacity: enabled ? 1 : 0.4
                       bordered: true
                       selected: root.hasSelection && Model.canCollapse(root.selectedWorld)
                       enabled: root.hasSelection && Model.canCollapse(root.selectedWorld) && (root.live || root.fixture)
@@ -1896,6 +1908,7 @@ Item {
       confirmText: root.rootsConfirmKind === "remove" ? "Remove" : "Register"
       onCanceled: { root.rootsConfirmOpen = false; keyCatcher.forceActiveFocus() }
       onConfirmed: { if (root.rootsConfirmKind === "remove") root.rootsApplyRemove(); else root.rootsApply() }
+    }
     }
   }
 }

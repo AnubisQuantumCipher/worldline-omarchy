@@ -112,6 +112,11 @@ Item {
     }
     if (event.key === Qt.Key_Escape) { root.back(); return true }
     if (event.text === "m" || event.text === "M") { root.focusMission(); return true }
+    if (event.text >= "1" && event.text <= "9" && event.text.length === 1) {
+      var index = Number(event.text) - 1
+      if (index < root.adapters.length && root.adapters[index].state === "AVAILABLE") root.toggleAgent(String(root.adapters[index].name))
+      return true
+    }
     if (event.text === "t" || event.text === "T") { root.raceMode = !root.raceMode; return true }
     if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) { root.launch(); return true }
     return false
@@ -182,7 +187,7 @@ Item {
 
           RowLayout {
             Layout.fillWidth: true
-            WlSectionTitle { text: root.raceMode ? "CHOOSE EXACTLY THREE ADAPTERS" : "CHOOSE ONE ADAPTER" }
+            WlSectionTitle { text: (root.raceMode ? "CHOOSE EXACTLY THREE ADAPTERS" : "CHOOSE ONE ADAPTER") + " (1–9)" }
             Item { Layout.fillWidth: true }
             Button {
               text: root.adaptersLoading ? "probing…" : "re-probe"
@@ -208,6 +213,7 @@ Item {
             delegate: Rectangle {
               id: adapterRow
               required property var modelData
+              required property int index
               readonly property bool available: modelData.state === "AVAILABLE"
               readonly property bool chosen: root.raceMode ? root.raceAgents.indexOf(String(modelData.name)) >= 0 : root.selectedAgent === String(modelData.name)
               readonly property int lane: root.raceMode ? root.raceAgents.indexOf(String(modelData.name)) : -1
@@ -229,7 +235,7 @@ Item {
                   spacing: Style.spacing.sm
                   Text {
                     textFormat: Text.PlainText
-                    text: adapterRow.chosen ? (root.raceMode ? ["α", "β", "γ"][adapterRow.lane] : "●") : "○"
+                    text: (adapterRow.index + 1) + " " + (adapterRow.chosen ? (root.raceMode ? ["α", "β", "γ"][adapterRow.lane] : "●") : "○")
                     color: adapterRow.chosen ? Color.accent : Color.muted
                     font.family: Style.font.family
                     font.pixelSize: Style.font.body
@@ -290,6 +296,10 @@ Item {
           WlSectionTitle { text: root.raceMode ? "RACE NAME (optional lane prefix)" : "WORLD ALIAS" }
           TextField {
             id: aliasField
+            Keys.priority: Keys.BeforeItem
+            Keys.onPressed: function(event) {
+              if (event.key === Qt.Key_Escape || event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { root.forceActiveFocus(); root.requestFocus(); event.accepted = true }
+            }
             visible: !root.raceMode
             Layout.preferredWidth: Style.space(240)
             placeholderText: root.suggestAlias()
@@ -298,6 +308,10 @@ Item {
           }
           TextField {
             id: raceNameField
+            Keys.priority: Keys.BeforeItem
+            Keys.onPressed: function(event) {
+              if (event.key === Qt.Key_Escape || event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { root.forceActiveFocus(); root.requestFocus(); event.accepted = true }
+            }
             visible: root.raceMode
             Layout.preferredWidth: Style.space(240)
             placeholderText: "lanes: alpha · beta · gamma"
@@ -320,6 +334,11 @@ Item {
           id: missionEditor
           Layout.fillWidth: true
           Layout.fillHeight: true
+          Keys.priority: Keys.BeforeItem
+          Keys.onPressed: function(event) {
+            if (event.key === Qt.Key_Escape) { root.forceActiveFocus(); root.requestFocus(); event.accepted = true }
+            else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && (event.modifiers & Qt.ControlModifier)) { root.launch(); event.accepted = true }
+          }
           enabled: root.initialized && !root.fixture
           placeholderText: root.raceMode
             ? "Describe one mission. Each chosen agent receives the same frozen reality and works in its own world."
@@ -392,6 +411,7 @@ Item {
           Button { text: "Back"; bordered: true; onClicked: root.back() }
           Button {
             text: root.busy ? "launching…" : (root.raceMode ? "Launch race" : "Fork " + root.effectiveAlias)
+            opacity: enabled ? 1 : 0.4
             bordered: true
             selected: root.canLaunch
             enabled: root.canLaunch
