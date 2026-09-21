@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.1 — 2026-09-21 · the inspector follows the active world; tall graphs fit
+
+- **`worldline inspect ALIAS` now moves the cockpit's selection.** The selection made at first
+  load stuck until the operator navigated; with twenty worlds the panel kept showing an old
+  PRIME generation while the header said another world was active.
+- **Auto-fit considers height.** A history eight generations deep put the newest lanes below
+  the viewport; the fit now uses both axes (down to 35 %), and `0` still restores it.
+
 ## 1.3.0 — 2026-09-20 · engine 1.2.0 surfaces
 
 - **Diagnostics card** gains four rows from `doctor`: **anchor** (signed receipt ledger: entries,

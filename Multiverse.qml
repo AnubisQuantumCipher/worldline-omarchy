@@ -170,10 +170,18 @@ Item {
     if (text === root.lastRaw) return
     var parsed = Model.parseStatus(text)
     if (!parsed) return
+    var previousActive = root.status ? String(root.status.activeWorld || "PRIME") : null
     root.lastRaw = text
     root.status = parsed
     if (root.selectedIndex >= root.worlds.length) root.selectedIndex = Math.max(-1, root.worlds.length - 1)
     if (root.selectedIndex < 0) root.selectedIndex = Model.defaultSelection(parsed)
+    // `worldline inspect ALIAS` (or `switch`) changes the active world; the inspector follows it
+    // unless the operator is typing. Before, the selection made at first load stuck forever.
+    var nowActive = String(parsed.activeWorld || "PRIME")
+    if (previousActive !== null && nowActive !== previousActive && nowActive !== "PRIME" && !root.editing) {
+      var activeIndex = Model.worldIndexByAlias(root.worlds, nowActive)
+      if (activeIndex >= 0) root.selectedIndex = activeIndex
+    }
     var rec = parsed.lastReceipt
     if (rec && rec.receiptId && rec.atomicCollapse && rec.atomicCollapse.state === "COMMITTED") {
       if (!root.statusLoadedOnce) {
@@ -1272,10 +1280,14 @@ Item {
                       }
                     }
                     layoutNodes = out
-                    if (root.graphAutoFit && graphViewport.width > 0) {
-                      var fit = Math.max(0.5, Math.min(1, graphViewport.width / Math.max(widest, 1)))
+                    if (root.graphAutoFit && graphViewport.width > 0 && graphViewport.height > 0) {
+                      // Fit both axes: a deep history (many generations) is as common as a wide one.
+                      var maxDepthRow = 0
+                      for (var q = 0; q < out.length; q++) maxDepthRow = Math.max(maxDepthRow, out[q].depth)
+                      var tallest = Style.space(64) + maxDepthRow * rowGap + Style.space(120)
+                      var fit = Math.max(0.35, Math.min(1, graphViewport.width / Math.max(widest, 1), graphViewport.height / Math.max(tallest, 1)))
                       root.graphZoom = fit
-                      root.graphPanX = graphViewport.width * (1 - fit) / 2
+                      root.graphPanX = Math.max(0, graphViewport.width * (1 - fit) / 2)
                       root.graphPanY = 0
                     }
                   }
