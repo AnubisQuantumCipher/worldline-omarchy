@@ -1,0 +1,35 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  assure-and-publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches manifest version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')"
+          test "$tag" = "$version" || { echo "tag v$tag != manifest $version" >&2; exit 1; }
+          python3 -c 'import json; m=json.load(open("manifest.json")); assert m["id"]=="khephri.worldline" and set(m["kinds"])=={"service","overlay","bar-widget"}'
+      - name: Model.js unit tests
+        run: node tools/test-model.mjs
+      - name: Deterministic archive from the tagged tree
+        run: |
+          mkdir -p dist
+          git archive --format=tar.gz --prefix="khephri.worldline-${GITHUB_REF_NAME}/" -o "dist/khephri.worldline-${GITHUB_REF_NAME}.tar.gz" "$GITHUB_REF_NAME"
+          (cd dist && sha256sum "khephri.worldline-${GITHUB_REF_NAME}.tar.gz" > "khephri.worldline-${GITHUB_REF_NAME}.tar.gz.sha256")
+          cat "dist/khephri.worldline-${GITHUB_REF_NAME}.tar.gz.sha256"
+          echo "release commit: $(git rev-parse HEAD)"
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes=$(awk -v tag="${GITHUB_REF_NAME#v}" 'BEGIN{p=0} /^## /{ if (p) exit; if (index($0, tag)) p=1 } p' CHANGELOG.md)
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.sha256 --title "khephri.worldline $GITHUB_REF_NAME" --notes "$notes"$'\n\n'"Release commit: $(git rev-parse HEAD)"
