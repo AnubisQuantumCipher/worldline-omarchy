@@ -16,7 +16,7 @@ const exportsList = [
   "defaultSelection", "siblingComparison", "integrityRows", "openTransactions", "capabilityRows",
   "parseCliError", "deltaSummary", "deltaCount", "operationKind", "operationLabel",
   "canCollapse", "canReturnTo", "isPrimeGeneration", "widgetSetting", "runningJobCount",
-  "activeJob", "stateCounts", "fmtDuration", "shortHash", "shortAlias", "displayAlias",
+  "activeJob", "stateCounts", "fmtDuration", "shortHash", "shortAlias", "displayAlias", "jobLabel", "fmtBytes",
 ];
 const M = {};
 new Function("exports", source + ";" + exportsList.map((n) => `exports.${n}=${n};`).join(""))(M);
@@ -114,6 +114,21 @@ test("delta helpers count operations and label them without inventing paths", ()
   assert.equal(M.operationKind({ op: "DELETE" }), "−");
   assert.equal(M.operationLabel({ pathDisplay: "x/y" }), "x/y");
   assert.equal(M.operationLabel({ weird: true }), '{"weird":true}');
+});
+test("job labels, truncated deltas, and the new diagnostics rows", () => {
+  assert.equal(M.jobLabel({ state: "VALID" }), "FINISHED");
+  assert.equal(M.jobLabel({ state: "TIMED_OUT" }), "TIMED OUT");
+  assert.equal(M.jobLabel({ state: "RUNNING" }), "RUNNING");
+  assert.equal(M.deltaCount(world({ delta: { added: 300, modified: 0, deleted: 0, files: new Array(200).fill({ op: "ADD", pathDisplay: "x" }), truncated: true, total: 300 } })), 300);
+  assert.equal(M.fmtBytes(0), "0 B"); assert.equal(M.fmtBytes(1536), "1.5 KB"); assert.equal(M.fmtBytes(52428800), "50 MB");
+  const doctor = { rootIntegrity: { state: "OK", roots: [] }, storeIntegrity: { state: "OK", findings: [] }, receiptCoverage: { state: "OK", committedWithoutReceipt: [] }, recovery: { state: "OK", quarantined: [] }, unsupervisedWorlds: [],
+    anchor: { state: "OK", entries: 3, unanchoredReceipts: 0, attest: "VERIFIED", external: "MATCH" }, storeUsage: { bytes: { generations: 1048576, worlds: 0, transactions: 0, overlays: 0, logs: 0 }, total: 1048576 }, networkPolicy: { policy: "allowlist", allow: ["example.org"] }, limits: { defaultTimeoutSeconds: 900 } };
+  const rows = M.integrityRows(doctor);
+  const byName = Object.fromEntries(rows.map((r) => [r.name, r]));
+  assert.equal(byName.anchor.state, "OK"); assert.match(byName.anchor.detail, /attest verified · external match/); assert.equal(byName.anchor.urgent, false);
+  assert.equal(byName["store usage"].state, "1 MB"); assert.equal(byName.network.state, "ALLOWLIST"); assert.equal(byName.timeout.state, "900 s");
+  const broken = M.integrityRows({ ...doctor, anchor: { state: "OK", entries: 3, attest: "VERIFIED", external: "ROLLED_BACK" } });
+  assert.equal(broken.find((r) => r.name === "anchor").urgent, true);
 });
 test("jobs, counts, formatting and settings", () => {
   const jobs = [{ world: "i", state: "RUNNING" }, { world: "i", state: "DEGRADED" }, { world: "z", state: "STARTING" }];

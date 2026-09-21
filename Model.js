@@ -212,6 +212,8 @@ function riskTone(label) {
 
 function deltaCount(world) {
   var delta = world && isObject(world.delta) ? world.delta : {}
+  // The status document caps long file lists (engine 1.2.0) and says so; the count is the total.
+  if (delta.truncated && isFinite(Number(delta.total))) return Number(delta.total)
   if (Array.isArray(delta.files)) return delta.files.length
   var files = Number(delta.files)
   return isFinite(files) ? files : 0
@@ -252,6 +254,16 @@ function activeJob(jobs, instanceId) {
   for (var i = mine.length - 1; i >= 0; i--)
     if (mine[i].state === "RUNNING" || mine[i].state === "STARTING" || mine[i].state === "FINALIZING") return mine[i]
   return null
+}
+
+// Job states use the world vocabulary for a finished run ("VALID" means the run completed and
+// the world finalized VALID). Readers saw that as a world state, so the card says what happened
+// to the JOB.
+function jobLabel(job) {
+  var state = String(job && job.state || "?")
+  if (state === "VALID") return "FINISHED"
+  if (state === "TIMED_OUT") return "TIMED OUT"
+  return state
 }
 
 function runningJobCount(jobs) {
@@ -402,6 +414,36 @@ function integrityRows(doctor) {
          unsupervised.length ? unsupervised.map(function(w) { return w.alias }).join(", ") + " nonterminal without a job" : "every running world has a job",
          unsupervised.length > 0)
   }
+  var anchor = doctor.anchor
+  if (isObject(anchor)) {
+    var external = String(anchor.external || "UNCONFIGURED")
+    var anchorBad = anchor.state === "BROKEN" || external === "MISMATCH" || external === "ROLLED_BACK" || anchor.attest === "FAILED"
+    var detail = anchor.entries + " signed receipt(s)" +
+      (anchor.unanchoredReceipts ? " · " + anchor.unanchoredReceipts + " unanchored" : "") +
+      " · attest " + String(anchor.attest || "UNAVAILABLE").toLowerCase() +
+      " · external " + external.toLowerCase().replace("_", " ")
+    push("anchor", anchorBad ? "BROKEN" : String(anchor.state || "?"), detail, anchorBad)
+  }
+  var usage = doctor.storeUsage
+  if (isObject(usage) && isObject(usage.bytes)) {
+    var total = Number(usage.total || 0)
+    var parts = ["generations", "worlds", "transactions"].map(function(k) { return k + " " + fmtBytes(usage.bytes[k]) })
+    push("store usage", fmtBytes(total), parts.join(" · ") + " · `worldline prune` reclaims finished worlds", false)
+  }
+  var network = doctor.networkPolicy
+  if (isObject(network)) {
+    var policy = String(network.policy || "shared")
+    push("network", policy.toUpperCase(),
+         policy === "shared" ? "worlds share the host network; egress is not contained"
+         : policy === "allowlist" ? "worlds reach only their provider hosts" + ((network.allow || []).length ? " + " + network.allow.length + " configured" : "") + "; refusals are recorded per world"
+         : "worlds have no network at all",
+         false)
+  }
+  var limits = doctor.limits
+  if (isObject(limits)) {
+    var seconds = limits.defaultTimeoutSeconds
+    push("timeout", seconds ? seconds + " s" : "NONE", seconds ? "every world is stopped after this unless fork --timeout says otherwise" : "worlds run until they exit or are cancelled (limits.defaultTimeoutSeconds)", false)
+  }
   return rows
 }
 
@@ -431,6 +473,15 @@ function fmtStamp(iso) {
   if (!isFinite(t)) return String(iso)
   var d = new Date(t)
   return two(d.getHours()) + ":" + two(d.getMinutes()) + ":" + two(d.getSeconds())
+}
+
+function fmtBytes(value) {
+  var n = Number(value || 0)
+  if (!isFinite(n) || n < 1024) return Math.round(n) + " B"
+  var units = ["KB", "MB", "GB", "TB"]
+  var i = -1
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++ }
+  return (n >= 10 ? Math.round(n) : Math.round(n * 10) / 10) + " " + units[i]
 }
 
 function fmtDuration(bornIso, endedIso, nowMs) {

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "khephri.worldline",
   "name": "WORLDLINE",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "author": "Khephri Labs",
   "license": "MIT",
   "description": "Mission control for WORLDLINE: propose isolated worlds, run and compare agents, inspect evidence, review and commit one prepared transaction, recover safely.",

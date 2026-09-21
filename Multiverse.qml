@@ -1013,8 +1013,8 @@ Item {
                         spacing: Style.spacing.sm
                         Text {
                           textFormat: Text.PlainText
-                          text: String(modelData.state || "?")
-                          color: jobRow.active ? Color.accent : (modelData.state === "DEGRADED" || modelData.state === "DEAD" || modelData.state === "CANCELLED" ? Color.urgent : Color.muted)
+                          text: Model.jobLabel(modelData)
+                          color: jobRow.active ? Color.accent : (modelData.state === "DEGRADED" || modelData.state === "DEAD" || modelData.state === "TIMED_OUT" || modelData.state === "CANCELLED" ? Color.urgent : Color.muted)
                           font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true
                         }
                         Text {

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.0 — 2026-09-20 · engine 1.2.0 surfaces
+
+- **Diagnostics card** gains four rows from `doctor`: **anchor** (signed receipt ledger: entries,
+  unanchored count, the `attest` verdict, and whether the external copy matches; urgent on
+  BROKEN, MISMATCH, ROLLED_BACK, or a failed attest), **store usage** (bytes by area, with the
+  reminder that `worldline prune` reclaims finished worlds), **network** (the world egress
+  policy: shared / allowlist / none), and **timeout** (the default limit).
+- **Jobs card** says what happened to the job: a completed run reads FINISHED, a stopped one
+  TIMED OUT or CANCELLED; before, a finished job showed the world word VALID.
+- **Delta counts honour truncation**: the engine now caps a world's file list in the status
+  document at 200 entries and reports the total; the cockpit shows the total.
+
 ## 1.2.1 — 2026-09-20 · dense generations, real-credential harness
 
 - **Graph: a generation with many siblings overprinted its labels.** Eight worlds in one
