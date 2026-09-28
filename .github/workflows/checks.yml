@@ -1,0 +1,21 @@
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Manifest identity
+        run: python3 -c 'import json; m=json.load(open("manifest.json")); assert m["id"]=="khephri.worldline" and set(m["kinds"])=={"service","overlay","bar-widget"}'
+      - name: Model.js unit tests
+        run: node tools/test-model.mjs
+      - name: Plain-text sink check (every QML string stays out of a markup renderer)
+        run: node tools/check-plain-text.mjs
