@@ -43,7 +43,7 @@ Item {
       "--app-name=WORLDLINE",
       "--action=inspect=Inspect",
       "WORLDLINE — A better future has been found",
-      String(recommendation.world || recommendation.objective || "")
+      Model.notificationBody(recommendation.world || recommendation.objective || "")
     ]
     notificationProcess.running = true
   }

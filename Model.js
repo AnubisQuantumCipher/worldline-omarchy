@@ -534,6 +534,13 @@ function truncate(text, max) {
   return value.length > max ? value.substring(0, max - 1) + "…" : value
 }
 
+// A desktop-notification body is markup to a server that advertises body-markup (the Omarchy
+// shell renders it as StyledText), so a world alias or objective sent there as-is would be
+// interpreted. Escaping the three markup characters makes the server show the literal text.
+function notificationBody(text) {
+  return String(text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
 // Read a bar-widget setting for this plugin from the shell's detached bar config snapshot.
 function widgetSetting(barConfig, id, name, fallback) {
   if (!isObject(barConfig) || !isObject(barConfig.layout)) return fallback

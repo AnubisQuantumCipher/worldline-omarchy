@@ -321,9 +321,25 @@ Item {
             }
             visible: !root.raceMode
             Layout.preferredWidth: Style.space(240)
-            placeholderText: root.suggestAlias()
             text: root.aliasText
             onTextEdited: root.aliasText = text
+            // The suggestion is built from an adapter name the daemon reports, so it does not go
+            // through placeholderText: every stock style draws that with an AutoText
+            // PlaceholderText. This draws it where and when the style would, as plain text.
+            Text {
+              textFormat: Text.PlainText
+              x: aliasField.leftPadding
+              y: aliasField.topPadding
+              width: aliasField.width - (aliasField.leftPadding + aliasField.rightPadding)
+              height: aliasField.height - (aliasField.topPadding + aliasField.bottomPadding)
+              text: root.suggestAlias()
+              font: aliasField.font
+              color: aliasField.placeholderTextColor
+              verticalAlignment: aliasField.verticalAlignment
+              visible: !aliasField.length && !aliasField.preeditText && (!aliasField.activeFocus || aliasField.horizontalAlignment !== Qt.AlignHCenter)
+              elide: Text.ElideRight
+              renderType: aliasField.renderType
+            }
           }
           TextField {
             id: raceNameField
@@ -351,6 +367,7 @@ Item {
         WlSectionTitle { text: "MISSION (M to edit · Ctrl+Enter launches)" }
         TextArea {
           id: missionEditor
+          textFormat: TextEdit.PlainText
           Layout.fillWidth: true
           Layout.fillHeight: true
           Keys.priority: Keys.BeforeItem

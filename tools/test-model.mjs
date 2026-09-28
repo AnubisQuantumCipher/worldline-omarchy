@@ -17,6 +17,7 @@ const exportsList = [
   "parseCliError", "deltaSummary", "deltaCount", "operationKind", "operationLabel",
   "canCollapse", "canReturnTo", "isPrimeGeneration", "widgetSetting", "runningJobCount",
   "activeJob", "stateCounts", "fmtDuration", "shortHash", "shortAlias", "displayAlias", "jobLabel", "fmtBytes",
+  "notificationBody",
 ];
 const M = {};
 new Function("exports", source + ";" + exportsList.map((n) => `exports.${n}=${n};`).join(""))(M);
@@ -141,5 +142,12 @@ test("jobs, counts, formatting and settings", () => {
   assert.equal(M.displayAlias(world({ instanceId: "p1" }), base, "PRIME′"), "PRIME′");
   assert.equal(M.widgetSetting({ layout: { right: [{ id: "khephri.worldline", motionEnabled: false }] } }, "khephri.worldline", "motionEnabled", true), false);
   assert.equal(M.widgetSetting(null, "khephri.worldline", "motionEnabled", true), true);
+});
+test("notification bodies carry daemon strings as literal text, not markup", () => {
+  assert.equal(M.notificationBody('fix-<img src="http://127.0.0.1:9/b.png">'), 'fix-&lt;img src="http://127.0.0.1:9/b.png"&gt;');
+  assert.equal(M.notificationBody("<a href='x'>a & b</a>"), "&lt;a href='x'&gt;a &amp; b&lt;/a&gt;");
+  assert.equal(M.notificationBody("&lt;"), "&amp;lt;");
+  assert.equal(M.notificationBody("claude-1"), "claude-1");
+  assert.equal(M.notificationBody(null), "");
 });
 console.log(`${passed} passed${process.exitCode ? ", with failures" : ""}`);
