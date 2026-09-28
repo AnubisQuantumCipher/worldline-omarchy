@@ -44,6 +44,12 @@ grim /tmp/wl.png   # screenshot to check rendering
 ## Pull requests
 
 - One focused change per PR; describe the before/after (a screenshot helps).
+- Run `node tools/test-model.mjs` and `node tools/check-plain-text.mjs`; CI runs both.
+  Strings here come from the engine, adapters, projects, and coding agents, so none may reach
+  a markup renderer: every `Text`/`Label` sets `textFormat: Text.PlainText` (a
+  `TextEdit`/`TextArea` sets `TextEdit.PlainText`), `placeholderText` is a constant, no
+  Qt Quick Controls `ToolTip` (use the shell `Button`'s `tooltipText`), and a
+  `notify-send` body goes through `Model.notificationBody()`.
 - Confirm the plugin still loads with no QML errors:
   `journalctl --user -n 60 | grep -iE 'Multiverse|WorldlineBar'` should be clean.
 - Keep the plugin self-contained — no new runtime dependencies beyond the

@@ -153,7 +153,7 @@ Drive keys on Wayland with `ydotool` and capture with `grim`; lint with
 | `ForkPanel.qml` | mission creation (single fork / race) |
 | `CollapsePanel.qml` | prepare → review → confirm → commit / abort |
 | `WlCall.qml`, `WlCard.qml`, `WlChip.qml`, `WlKV.qml`, `WlSectionTitle.qml` | shared pieces built on `qs.Commons` / `qs.Ui` tokens |
-| `tools/` | `ui-harness.sh`, `fixture_agent.py`, `slow_agent.py` |
+| `tools/` | `ui-harness.sh`, `fixture_agent.py`, `slow_agent.py`; `test-model.mjs` (Model.js unit tests) and `check-plain-text.mjs` (QML plain-text sink check), both run in CI |
 
 **Data flow.** `worldlined` writes an atomic `status.json`; the plugin watches it (with a
 slow reload in case an `os.replace` escapes the watcher) and parses only when the bytes
@@ -173,7 +173,8 @@ from the shell's shared tokens and components, so the plugin follows the active 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Work in a clone of this repository, deploy through
-`./install.sh` (fast-forward), and keep every `Text` at `textFormat: Text.PlainText`.
+`./install.sh` (fast-forward), and keep every `Text` at `textFormat: Text.PlainText`:
+`node tools/check-plain-text.mjs` fails the build otherwise.
 
 ## License
 

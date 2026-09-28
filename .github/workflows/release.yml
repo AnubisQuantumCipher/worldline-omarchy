@@ -20,6 +20,8 @@ jobs:
           python3 -c 'import json; m=json.load(open("manifest.json")); assert m["id"]=="khephri.worldline" and set(m["kinds"])=={"service","overlay","bar-widget"}'
       - name: Model.js unit tests
         run: node tools/test-model.mjs
+      - name: Plain-text sink check (every QML string stays out of a markup renderer)
+        run: node tools/check-plain-text.mjs
       - name: Deterministic archive from the tagged tree
         run: |
           mkdir -p dist
