@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.3.2 — 2026-09-28 · no engine string reaches a markup renderer, and CI checks it
+
+From the marketplace security review of 1.3.1 (omarchy-plugin-marketplace#7900). Every `Text`
+in 1.3.1 already set `textFormat: Text.PlainText` (since 1.1.1), including the three the review
+cites and the shared `WlCard`, `WlChip` and `WlKV`; an audit of every other path a daemon,
+adapter, project or agent string can take found three that did not.
+
+- **The suggested world alias was drawn as AutoText.** The fork panel put the suggestion, built
+  from an adapter name the daemon reports, in the alias field's `placeholderText`, and every
+  stock Qt Quick Controls style draws placeholders with an AutoText `PlaceholderText`. An
+  adapter named `x<img src="http://…">` made the shell fetch that URL (measured on Qt 6.11.2,
+  Fusion and Basic styles). The suggestion is now a plain-text `Text` drawn where and when the
+  placeholder would be.
+- **The "better future" notification body carried the world alias or objective as markup.**
+  The Omarchy shell advertises `body-markup` and renders the body as StyledText (it strips
+  `<img>`, not links or formatting). The body is now entity-escaped (`Model.notificationBody`),
+  so the shell shows it literally.
+- **The mission editor states `textFormat: TextEdit.PlainText`** instead of relying on the
+  `TextArea` default.
+- **tools/check-plain-text.mjs** parses every QML file and fails, closed on anything it cannot
+  parse, when a `Text`/`Label`/`TextEdit`/`TextArea` lacks the PlainText format; when any other
+  text format, link handler or `Qt.openUrlExternally` appears; when a `placeholderText` or image
+  `source` is not a constant; when a Qt Quick Controls `ToolTip` is used; when a string reaches
+  an external component that has not been audited as plain text; or when a `notify-send`
+  argument skips `Model.notificationBody`. The release workflow runs it, and a new `checks`
+  workflow runs it with the Model.js tests on every push to `main` and every pull request.
+- **tools/test-model.mjs**: notification escaping (12 tests).
+
 ## 1.3.1 — 2026-09-21 · the inspector follows the active world; tall graphs fit
 
 - **`worldline inspect ALIAS` now moves the cockpit's selection.** The selection made at first
