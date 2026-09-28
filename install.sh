@@ -91,11 +91,16 @@ else
   echo "  bindings.lua not found — bind the keys manually if you want them"
 fi
 
-# 3. Live reload.
-command -v omarchy-shell >/dev/null 2>&1 && omarchy-shell -q shell rescanPlugins || true
+# 3. Live reload. Either restart the shell or ask it to rescan, never both: a rescan is still
+# completing plugin objects when the restart kills the shell, and quickshell 0.3.1 has already
+# freed its IPC handler registry by then, so the shell segfaults instead of exiting
+# (quickshell-mirror/quickshell#956). A restart re-reads every plugin on its own.
 if [[ "${WORLDLINE_NO_SHELL_RESTART:-0}" != "1" ]] && command -v omarchy-restart-shell >/dev/null 2>&1; then
   omarchy-restart-shell >/dev/null 2>&1 || true
   echo "  shell restarted"
+elif command -v omarchy-shell >/dev/null 2>&1; then
+  omarchy-shell -q shell rescanPlugins || true
+  echo "  shell asked to rescan plugins"
 fi
 
 echo "Done. Click the globe in the bar, or press SUPER+CTRL+W."
