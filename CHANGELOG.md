@@ -8,10 +8,15 @@ command's entire stdout and stderr with no byte limit and no deadline, and the l
 exhaust or hold the long-lived shell before any callback saw it.
 
 - **`WlCall` bounds every call.** Each stream is measured as it arrives, one pipe read at a time,
-  so the shell never holds more than a limit plus one read: 4 MiB of stdout and 256 KiB of
-  stderr by default. A call still running at its deadline is stopped. Either bound kills the
-  process (SIGKILL), discards what it printed, and reports `CLI_OUTPUT_TOO_LARGE` or
-  `CLI_DEADLINE` through the call's ordinary error path (exit 137).
+  by its decoded length, and what a call delivers is checked in bytes when it exits: 1 MiB of
+  stdout and 256 KiB of stderr by default (the largest real output measured: doctor 5.6 KB,
+  adapters 3 KB, a transaction record 93 KB). A character is at most 3 bytes, so while a call
+  runs the shell holds at most three times a limit plus one read. A call still running at its
+  deadline is stopped. Either bound kills the process (SIGKILL), discards what it printed, and
+  reports `CLI_OUTPUT_TOO_LARGE` or `CLI_DEADLINE` through the call's ordinary error path
+  (exit 137). The probe reads the decoded length rather than the raw bytes because reading
+  the bytes on every read keeps each superseded buffer alive until the garbage collector runs:
+  1 MiB written in 256-byte pieces peaked 45 MB above idle that way, 8 MB this way.
 - **Deadlines per action:** 60 s for adapters; 300 s for the doctor, fork, race, abort and the
   cockpit's actions; 30 minutes for collapse or return prepare and for commit; an hour for
   registering or removing a root, which moves the directory. A stopped CLI does not stop a
@@ -31,11 +36,15 @@ exhaust or hold the long-lived shell before any callback saw it.
   `data.byteLength` limit is compared; or when no `Timer` stops the process with `signal(9)`,
   directly or through a function. It runs in the checks and release workflows. On 1.3.2's tree it
   reports 13 problems; with the deadline Timer removed, or a `SplitParser` put back, it fails.
-- **Measured in Quickshell 0.3.1** (a throwaway instance running this `WlCall.qml`): `yes` was
-  stopped just past a 1 MiB stdout limit in 5 ms; a stderr flood past 64 KiB; `sleep 30` at
-  2.1 s against a 2 s deadline; a call that printed nothing after one that printed `hello`
-  returned empty output; a missing binary called back once with `CLI_UNAVAILABLE`; multi-byte
-  UTF-8 decoded intact.
+- **Measured in Quickshell 0.3.1** (a throwaway instance running this `WlCall.qml`):
+  - `yes` was stopped just past the 1 MiB stdout limit in 6 ms, and a stderr flood past 64 KiB;
+  - `sleep 30` was stopped at 2.0 s against a 2 s deadline;
+  - a call that printed nothing after one that printed `hello` returned empty output;
+  - a missing binary called back once with `CLI_UNAVAILABLE`;
+  - 400,000 `é` (800,000 bytes) were delivered intact; 600,000 (1,200,000 bytes) were refused
+    at exit by the byte check;
+  - peak memory above an idle instance: +9 to +11 MB for a `yes` flood, +7 to +9 MB for 2 MB
+    written in 256-byte pieces, both stopped at 1 MiB; 1.3.2 had no bound at all.
 - **tools/test-model.mjs**: `logTail` (5 tests).
 
 ## 1.3.2 — 2026-09-28 · no engine string reaches a markup renderer, and CI checks it

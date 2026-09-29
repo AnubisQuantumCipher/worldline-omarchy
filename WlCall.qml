@@ -10,9 +10,10 @@ import Quickshell.Io
 // Every call is bounded. The shell is long-lived, and what a call prints can carry text an
 // agent controls (its stderr, a mission, a path), so nothing it prints may exhaust or hold the
 // shell (marketplace review of 1.3.2, omarchy-plugin-marketplace#7900):
-// - at most `limits.stdoutBytes` of stdout and `limits.stderrBytes` of stderr are kept. Each
-//   stream is measured as it arrives, one pipe read at a time, so the shell never holds more
-//   than a limit plus one read;
+// - each stream is measured as it arrives, one pipe read at a time, by its decoded length. A
+//   character is at most 3 bytes, so while a call runs the shell holds at most three times a
+//   limit plus one read; what a call delivers is checked in bytes when it exits. The defaults
+//   are 1 MiB of stdout and 256 KiB of stderr;
 // - a call still running after `limits.seconds` is stopped.
 // A call that crosses either bound is killed (SIGKILL) and what it printed is discarded; `done`
 // receives exit 137 and a `worldline: CLI_OUTPUT_TOO_LARGE: …` or `worldline: CLI_DEADLINE: …`
@@ -29,10 +30,10 @@ Item {
   property var environment: ({})
   // The bounds of a call that names none of its own.
   property int seconds: 120
-  property int stdoutBytes: 4194304
+  property int stdoutBytes: 1048576
   property int stderrBytes: 262144
 
-  property var _limits: ({ seconds: 120, stdoutBytes: 4194304, stderrBytes: 262144 })
+  property var _limits: ({ seconds: 120, stdoutBytes: 1048576, stderrBytes: 262144 })
   property string _label: ""
   property string _stopped: ""   // the refusal line once a bound stopped the call
   // Whether this call's streams delivered anything. An incremental collector keeps its last
@@ -68,10 +69,16 @@ Item {
     process.signal(9)
   }
 
+  function _tooLarge(limit, stream) {
+    return "worldline: CLI_OUTPUT_TOO_LARGE: " + root._label + " wrote more than " + limit
+         + " bytes to " + stream + "; it was stopped and its output discarded"
+  }
+
+  // The decoded length, not `collector.data`: reading `data` on every read keeps each superseded
+  // buffer alive until the garbage collector runs (measured in Quickshell 0.3.1: 1 MiB written
+  // in 256-byte pieces peaked 45 MB above idle that way, 8 MB this way).
   function _measure(collector, limit, stream) {
-    if (root._stopped === "" && collector.data.byteLength > limit)
-      root._halt("worldline: CLI_OUTPUT_TOO_LARGE: " + root._label + " wrote more than " + limit
-                 + " bytes to " + stream + "; it was stopped and its output discarded")
+    if (root._stopped === "" && collector.text.length > limit) root._halt(root._tooLarge(limit, stream))
   }
 
   function _finish(exitCode, stdout, stderr, facts) {
@@ -106,12 +113,16 @@ Item {
       onDataChanged: { root._gotErr = true; root._measure(err, root._limits.stderrBytes, "stderr") }
     }
     onExited: function(exitCode, exitStatus) {
+      var outBytes = root._gotOut ? out.data.byteLength : 0
+      var errBytes = root._gotErr ? err.data.byteLength : 0
+      if (root._stopped === "" && outBytes > root._limits.stdoutBytes) root._stopped = root._tooLarge(root._limits.stdoutBytes, "stdout")
+      if (root._stopped === "" && errBytes > root._limits.stderrBytes) root._stopped = root._tooLarge(root._limits.stderrBytes, "stderr")
       if (root._stopped !== "") {
         root._finish(137, "", root._stopped, { stdoutBytes: 0 })
         return
       }
       root._finish(exitCode, root._gotOut ? String(out.text || "") : "", root._gotErr ? String(err.text || "") : "",
-                   { stdoutBytes: root._gotOut ? out.data.byteLength : 0 })
+                   { stdoutBytes: outBytes })
     }
     // Quickshell emits `exited` before `runningChanged` for a process that ran, and only
     // `runningChanged` for one that could not be started; a callback still waiting here is that case.

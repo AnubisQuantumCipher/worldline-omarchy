@@ -12,8 +12,8 @@
 //      `onDataChanged` handler, so every read is measured as it arrives. `SplitParser` is refused
 //      anywhere (it buffers an unterminated line without limit), and so is `waitForEnd: true`
 //      (nothing can measure a stream that is only seen once it has ended).
-//   3. The file compares a collector's `data.byteLength` against a limit, and stops the process
-//      with `<id>.signal(9)`.
+//   3. The file compares a collector's size (`text.length` or `data.byteLength`) against a
+//      limit, and stops the process with `<id>.signal(9)`.
 //   4. A `Timer` stops it: some Timer's body contains `<id>.signal(9)`, or calls a function of
 //      the same file whose body does.
 //
@@ -116,7 +116,7 @@ function check(dir) {
     for (const m of text.matchAll(/\bwaitForEnd\s*:\s*true\b/g)) problems.push(`${rel}:${lineOf(text, m.index)}: waitForEnd: true cannot be measured before the stream ends`);
     const functions = new Map(blocks(text, /\bfunction\s+([A-Za-z_]\w*)\s*\([^)]*\)\s*\{/g).map((f) => [f.name, f.body]));
     const timers = blocks(text, /\b(Timer)\s*\{/g);
-    const measured = /\.data\.byteLength\s*>/.test(text);
+    const measured = /\.(?:text\.length|data\.byteLength)\s*>/.test(text);
     for (const proc of blocks(text, /\b(Process)\s*\{/g)) {
       const at = `${rel}:${lineOf(text, proc.start)}`;
       const own = topLevel(proc.body);
@@ -132,7 +132,7 @@ function check(dir) {
         if (!/\bwaitForEnd\s*:\s*false\b/.test(parser)) problems.push(`${where}: ${id}.${m[1]} must set waitForEnd: false`);
         if (!/\bonDataChanged\s*:/.test(parser)) problems.push(`${where}: ${id}.${m[1]} has no onDataChanged measurement`);
       }
-      if (/\b(stdout|stderr)\s*:/.test(own) && !measured) problems.push(`${at}: ${id}: no collector's data.byteLength is compared against a limit`);
+      if (/\b(stdout|stderr)\s*:/.test(own) && !measured) problems.push(`${at}: ${id}: no collector's size is compared against a limit`);
       const stop = new RegExp(`\\b${id}\\.signal\\(\\s*9\\s*\\)`);
       if (!stop.test(text)) { problems.push(`${at}: ${id} is never stopped with ${id}.signal(9)`); continue; }
       const stoppers = new Set([...functions].filter(([, body]) => stop.test(body)).map(([name]) => name));

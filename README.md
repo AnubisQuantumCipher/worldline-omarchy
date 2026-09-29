@@ -169,7 +169,7 @@ from the shell's shared tokens and components, so the plugin follows the active 
 - `invariantPreservation: PROVED` on a receipt means the engine's proof manifest matched the
   running library at receipt time — it is not an external attestation.
 - Adapter probes and the doctor run on open and on demand; they are not streamed.
-- Every command the plugin runs is bounded: at most 4 MiB of stdout and 256 KiB of stderr are
+- Every command the plugin runs is bounded: at most 1 MiB of stdout and 256 KiB of stderr are
   kept, and a command still running at its deadline is stopped (60 s for adapters, 300 s for
   the doctor, fork and actions, 30 minutes for prepare and commit, an hour for registering or
   removing a root). A stopped command reports `CLI_OUTPUT_TOO_LARGE` or `CLI_DEADLINE`; a
