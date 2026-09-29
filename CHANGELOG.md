@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.3.3 — 2026-09-29 · every command the plugin runs is bounded in bytes and in time
+
+From the marketplace review of 1.3.2 (omarchy-plugin-marketplace#7900): `WlCall.qml` collected a
+command's entire stdout and stderr with no byte limit and no deadline, and the log view fed it
+`tail -n 60` of an agent's stderr, where one agent-written line can be any size. The output could
+exhaust or hold the long-lived shell before any callback saw it.
+
+- **`WlCall` bounds every call.** Each stream is measured as it arrives, one pipe read at a time,
+  so the shell never holds more than a limit plus one read: 4 MiB of stdout and 256 KiB of
+  stderr by default. A call still running at its deadline is stopped. Either bound kills the
+  process (SIGKILL), discards what it printed, and reports `CLI_OUTPUT_TOO_LARGE` or
+  `CLI_DEADLINE` through the call's ordinary error path (exit 137).
+- **Deadlines per action:** 60 s for adapters; 300 s for the doctor, fork, race, abort and the
+  cockpit's actions; 30 minutes for collapse or return prepare and for commit; an hour for
+  registering or removing a root, which moves the directory. A stopped CLI does not stop a
+  request the engine already received, and the message says to check the status.
+- **The agent log view reads bytes, not lines:** `tail -c 65536`, then the last 60 lines of that,
+  each capped at 2,000 characters (`Model.logTail`). When the read filled its window, the first
+  line is a fragment; it is dropped and the view says earlier output is not shown.
+- **The "better future" notification process is bounded too:** notify-send prints only the chosen
+  action's key, so more than 4 KiB, or a notification still waiting after 30 minutes, stops it.
+- **Fixed while doing this:** a command that could not be started never called back (Quickshell
+  reports only a running-state change), so its panel stayed loading; it now reports
+  `CLI_UNAVAILABLE`. An incremental collector keeps its last value when the next call prints
+  nothing, so each call now tracks whether its streams delivered anything.
+- **tools/check-bounded-processes.mjs** fails, closed, when a `Process` has no id; when its
+  stdout or stderr parser is not a `StdioCollector` with `waitForEnd: false` and an
+  `onDataChanged` measurement; when `SplitParser` or `waitForEnd: true` appears anywhere; when no
+  `data.byteLength` limit is compared; or when no `Timer` stops the process with `signal(9)`,
+  directly or through a function. It runs in the checks and release workflows. On 1.3.2's tree it
+  reports 13 problems; with the deadline Timer removed, or a `SplitParser` put back, it fails.
+- **Measured in Quickshell 0.3.1** (a throwaway instance running this `WlCall.qml`): `yes` was
+  stopped just past a 1 MiB stdout limit in 5 ms; a stderr flood past 64 KiB; `sleep 30` at
+  2.1 s against a 2 s deadline; a call that printed nothing after one that printed `hello`
+  returned empty output; a missing binary called back once with `CLI_UNAVAILABLE`; multi-byte
+  UTF-8 decoded intact.
+- **tools/test-model.mjs**: `logTail` (5 tests).
+
 ## 1.3.2 — 2026-09-28 · no engine string reaches a markup renderer, and CI checks it
 
 From the marketplace security review of 1.3.1 (omarchy-plugin-marketplace#7900). Every `Text`

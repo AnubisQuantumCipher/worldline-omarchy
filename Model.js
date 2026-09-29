@@ -523,6 +523,20 @@ function parseCliError(stderr, exitCode) {
   return result
 }
 
+// What the log view shows of an agent's stderr: its last `maxLines` lines, each at most
+// `maxChars` characters. The tail is read by bytes (`tail -c`), because one agent line can be any
+// size; when the read filled its whole window (`cut`), the first line is probably a fragment, so
+// it is dropped, and the view says that earlier output is not shown.
+function logTail(text, cut, maxLines, maxChars) {
+  var lines = String(text || "").split("\n")
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop()
+  if (cut && lines.length > 0) lines.shift()
+  var earlier = !!cut || lines.length > maxLines
+  lines = lines.slice(-maxLines).map(function(line) { return truncate(line, maxChars) })
+  if (lines.length === 0) return "(no complete line in the last part of the log)"
+  return (earlier ? "… earlier output not shown\n" : "") + lines.join("\n")
+}
+
 function firstLine(text) {
   var value = String(text || "").trim()
   var cut = value.indexOf("\n")

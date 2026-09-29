@@ -17,7 +17,7 @@ const exportsList = [
   "parseCliError", "deltaSummary", "deltaCount", "operationKind", "operationLabel",
   "canCollapse", "canReturnTo", "isPrimeGeneration", "widgetSetting", "runningJobCount",
   "activeJob", "stateCounts", "fmtDuration", "shortHash", "shortAlias", "displayAlias", "jobLabel", "fmtBytes",
-  "notificationBody",
+  "notificationBody", "logTail",
 ];
 const M = {};
 new Function("exports", source + ";" + exportsList.map((n) => `exports.${n}=${n};`).join(""))(M);
@@ -150,4 +150,35 @@ test("notification bodies carry daemon strings as literal text, not markup", () 
   assert.equal(M.notificationBody("claude-1"), "claude-1");
   assert.equal(M.notificationBody(null), "");
 });
+
+test("logTail: the last lines of a short log, unmarked", () => {
+  assert.equal(M.logTail("a\nb\nc\n", false, 60, 2000), "a\nb\nc");
+  assert.equal(M.logTail("only", false, 60, 2000), "only");
+});
+
+test("logTail: more lines than the view keeps are marked as not shown", () => {
+  const text = Array.from({ length: 70 }, (_, i) => `line ${i}`).join("\n");
+  const shown = M.logTail(text, false, 60, 2000).split("\n");
+  assert.equal(shown[0], "… earlier output not shown");
+  assert.equal(shown.length, 61);
+  assert.equal(shown[1], "line 10");
+  assert.equal(shown[60], "line 69");
+});
+
+test("logTail: a byte-cut tail drops its first (fragment) line and says so", () => {
+  const shown = M.logTail("ment of a line\nwhole one\nwhole two\n", true, 60, 2000);
+  assert.equal(shown, "… earlier output not shown\nwhole one\nwhole two");
+});
+
+test("logTail: a cut tail that is one fragment has no complete line to show", () => {
+  assert.equal(M.logTail("x".repeat(65536), true, 60, 2000), "(no complete line in the last part of the log)");
+});
+
+test("logTail: each line is capped at maxChars", () => {
+  const shown = M.logTail("short\n" + "y".repeat(5000), false, 60, 2000).split("\n");
+  assert.equal(shown[0], "short");
+  assert.equal(shown[1].length, 2000);
+  assert.ok(shown[1].endsWith("…"));
+});
+
 console.log(`${passed} passed${process.exitCode ? ", with failures" : ""}`);

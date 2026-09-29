@@ -22,6 +22,8 @@ jobs:
         run: node tools/test-model.mjs
       - name: Plain-text sink check (every QML string stays out of a markup renderer)
         run: node tools/check-plain-text.mjs
+      - name: Bounded-process check (every Process is bounded in bytes and in time)
+        run: node tools/check-bounded-processes.mjs
       - name: Deterministic archive from the tagged tree
         run: |
           mkdir -p dist

@@ -153,7 +153,7 @@ Drive keys on Wayland with `ydotool` and capture with `grim`; lint with
 | `ForkPanel.qml` | mission creation (single fork / race) |
 | `CollapsePanel.qml` | prepare → review → confirm → commit / abort |
 | `WlCall.qml`, `WlCard.qml`, `WlChip.qml`, `WlKV.qml`, `WlSectionTitle.qml` | shared pieces built on `qs.Commons` / `qs.Ui` tokens |
-| `tools/` | `ui-harness.sh`, `fixture_agent.py`, `slow_agent.py`; `test-model.mjs` (Model.js unit tests) and `check-plain-text.mjs` (QML plain-text sink check), both run in CI |
+| `tools/` | `ui-harness.sh`, `fixture_agent.py`, `slow_agent.py`; `test-model.mjs` (Model.js unit tests), `check-plain-text.mjs` (QML plain-text sink check) and `check-bounded-processes.mjs` (every process bounded in bytes and time), all run in CI |
 
 **Data flow.** `worldlined` writes an atomic `status.json`; the plugin watches it (with a
 slow reload in case an `os.replace` escapes the watcher) and parses only when the bytes
@@ -169,12 +169,20 @@ from the shell's shared tokens and components, so the plugin follows the active 
 - `invariantPreservation: PROVED` on a receipt means the engine's proof manifest matched the
   running library at receipt time — it is not an external attestation.
 - Adapter probes and the doctor run on open and on demand; they are not streamed.
+- Every command the plugin runs is bounded: at most 4 MiB of stdout and 256 KiB of stderr are
+  kept, and a command still running at its deadline is stopped (60 s for adapters, 300 s for
+  the doctor, fork and actions, 30 minutes for prepare and commit, an hour for registering or
+  removing a root). A stopped command reports `CLI_OUTPUT_TOO_LARGE` or `CLI_DEADLINE`; a
+  request it had already sent may still complete in the engine, so check the status. The agent
+  log view reads the last 64 KiB of the agent's stderr, whatever its line lengths.
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Work in a clone of this repository, deploy through
 `./install.sh` (fast-forward), and keep every `Text` at `textFormat: Text.PlainText`:
-`node tools/check-plain-text.mjs` fails the build otherwise.
+`node tools/check-plain-text.mjs` fails the build otherwise. Start processes only through
+`WlCall` (or bound them the same way): `node tools/check-bounded-processes.mjs` fails the build
+for a `Process` without a byte limit and a deadline.
 
 ## License
 

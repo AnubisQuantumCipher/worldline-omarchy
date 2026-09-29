@@ -38,6 +38,7 @@ Item {
     if (id === recommendationId) return
     recommendationId = id
     if (notificationProcess.running) return
+    notificationDeadline.restart()
     notificationProcess.command = [
       "notify-send",
       "--app-name=WORLDLINE",
@@ -74,15 +75,43 @@ Item {
     onTriggered: root.applyStatus(statusFile.text())
   }
 
+  // notify-send prints the key of the action the operator chose, and nothing else. Bounded like
+  // every process in this plugin: more than 4 KiB of output, or a notification still waiting
+  // after 30 minutes, stops it (its Inspect action then does nothing).
+  property bool notificationGotOutput: false
+  property bool notificationStopped: false
+
+  Timer {
+    id: notificationDeadline
+    interval: 1800000
+    repeat: false
+    onTriggered: {
+      if (notificationProcess.running) { root.notificationStopped = true; notificationProcess.signal(9) }
+    }
+  }
+
   Process {
     id: notificationProcess
     running: false
+    onRunningChanged: {
+      if (notificationProcess.running) { root.notificationGotOutput = false; root.notificationStopped = false }
+    }
     stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        if (String(text || "").trim() === "inspect" && root.shell)
-          root.shell.summon("khephri.worldline", JSON.stringify({ mode: "multiverse", select: root.status?.ghostRecommendation?.world || "" }))
+      id: notificationOut
+      waitForEnd: false
+      onDataChanged: {
+        root.notificationGotOutput = true
+        if (notificationOut.data.byteLength > 4096 && !root.notificationStopped) {
+          root.notificationStopped = true
+          notificationProcess.signal(9)
+        }
       }
+    }
+    onExited: function(exitCode, exitStatus) {
+      notificationDeadline.stop()
+      if (exitCode !== 0 || root.notificationStopped || !root.notificationGotOutput) return
+      if (String(notificationOut.text || "").trim() === "inspect" && root.shell)
+        root.shell.summon("khephri.worldline", JSON.stringify({ mode: "multiverse", select: root.status?.ghostRecommendation?.world || "" }))
     }
   }
 

@@ -136,9 +136,11 @@ Item {
     return false
   }
 
-  WlCall { id: prepareCall; environment: root.cliEnvironment }
-  WlCall { id: commitCall; environment: root.cliEnvironment }
-  WlCall { id: abortCall; environment: root.cliEnvironment }
+  // Prepare captures PRIME and checks the candidate; commit materializes it. Both can take
+  // minutes on a large root, so their deadlines are long, but never absent.
+  WlCall { id: prepareCall; environment: root.cliEnvironment; seconds: 1800 }
+  WlCall { id: commitCall; environment: root.cliEnvironment; seconds: 1800 }
+  WlCall { id: abortCall; environment: root.cliEnvironment; seconds: 300 }
 
   readonly property var operations: root.facts && root.facts.delta && Array.isArray(root.facts.delta.operations) ? root.facts.delta.operations : []
   readonly property var conflicts: root.facts && Array.isArray(root.facts.conflicts) ? root.facts.conflicts

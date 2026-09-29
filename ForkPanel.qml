@@ -141,7 +141,7 @@ Item {
     return false
   }
 
-  WlCall { id: launchCall; environment: root.cliEnvironment }
+  WlCall { id: launchCall; environment: root.cliEnvironment; seconds: 300 }
 
   ColumnLayout {
     anchors.fill: parent

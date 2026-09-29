@@ -235,10 +235,17 @@ Item {
     var path = root.stateHome + "/worldline/logs/" + instance + ".agent.stderr"
     root.logWorld = instance
     root.logLoading = true
-    logCall.run(["tail", "-n", "60", "--", path], function(exitCode, stdout, stderr) {
+    // `tail -c`: the last 64 KiB whatever the line lengths (one agent line can be any size).
+    logCall.run(["tail", "-c", "65536", "--", path], function(exitCode, stdout, stderr, facts) {
       root.logLoading = false
-      if (exitCode === 0) root.logText = stdout.trim() === "" ? "(agent wrote nothing to stderr)" : stdout
-      else root.logText = "no agent log for this world yet (" + Model.firstLine(stderr) + ")"
+      if (exitCode === 0) {
+        var cut = !!facts && facts.stdoutBytes >= 65536
+        root.logText = stdout.trim() === "" ? "(agent wrote nothing to stderr)" : Model.logTail(stdout, cut, 60, 2000)
+      } else if (exitCode === 137 || exitCode === 127) {
+        root.logText = Model.parseCliError(stderr, exitCode).message
+      } else {
+        root.logText = "no agent log for this world yet (" + Model.firstLine(stderr) + ")"
+      }
     })
   }
 
@@ -403,11 +410,13 @@ Item {
 
   // ------------------------------------------------------------ plumbing
 
-  WlCall { id: adaptersCall; environment: root.cliEnvironment }
-  WlCall { id: doctorCall; environment: root.cliEnvironment }
-  WlCall { id: actionCall; environment: root.cliEnvironment }
-  WlCall { id: logCall; environment: root.cliEnvironment }
-  WlCall { id: rootsCall; environment: root.cliEnvironment }
+  WlCall { id: adaptersCall; environment: root.cliEnvironment; seconds: 60 }
+  WlCall { id: doctorCall; environment: root.cliEnvironment; seconds: 300 }
+  WlCall { id: actionCall; environment: root.cliEnvironment; seconds: 300 }
+  // The agent's stderr is the one input here an agent writes directly: read by bytes, not lines.
+  WlCall { id: logCall; environment: root.cliEnvironment; seconds: 15; stdoutBytes: 65536; stderrBytes: 16384 }
+  // Registering or removing a root moves the directory; that can take long on a large one.
+  WlCall { id: rootsCall; environment: root.cliEnvironment; seconds: 3600 }
 
   FileView {
     id: statusFile
