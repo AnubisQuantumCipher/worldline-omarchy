@@ -102,28 +102,34 @@ fi
 RELOAD="none"
 if [[ "${WORLDLINE_NO_SHELL_RESTART:-0}" != "1" ]] && command -v omarchy-restart-shell >/dev/null 2>&1; then
   sleep 2
-  if omarchy-restart-shell >/dev/null 2>&1; then
+  # omarchy-restart-shell's own messages are kept: they say which way it failed.
+  if omarchy-restart-shell >/dev/null; then
     RELOAD="restarted"
     echo "  shell restarted"
   else
     rc=$?
     RELOAD="failed"
-    echo "  shell restart FAILED (omarchy-restart-shell exited $rc). The shell may still be running" >&2
-    echo "  the previous plugin (a locked session or a missing shell config refuses before any kill)," >&2
-    echo "  or it may be down. Run omarchy-restart-shell to load this commit." >&2
+    echo "  shell restart reported failure (omarchy-restart-shell exited $rc; its message is above)." >&2
+    echo "  If it refused before stopping the shell (a locked session, a missing shell config), the" >&2
+    echo "  shell was not restarted and the WORLDLINE service still runs the previous commit. If it" >&2
+    echo "  restarted the shell but could not re-secure the session lock, lock the session now." >&2
+    echo "  Otherwise the shell may be down. Run omarchy-restart-shell to load this commit." >&2
   fi
 elif command -v omarchy-shell >/dev/null 2>&1; then
   omarchy-shell -q shell rescanPlugins || true
   RELOAD="rescanned"
   echo "  shell asked to rescan plugins. The WORLDLINE service is kept loaded across a rescan and"
   echo "  keeps running the previous code until the shell restarts: run omarchy-restart-shell."
+elif [[ "${WORLDLINE_NO_SHELL_RESTART:-0}" == "1" ]]; then
+  echo "  shell not reloaded (WORLDLINE_NO_SHELL_RESTART=1, and omarchy-shell was not found to rescan):"
+  echo "  restart the shell to load this commit."
 else
   echo "  shell not reloaded (neither omarchy-restart-shell nor omarchy-shell was found):"
   echo "  restart the shell to load this commit."
 fi
 
 if [[ "$RELOAD" == "failed" ]]; then
-  echo "Installed $(git -C "$DEST" rev-parse --short HEAD), but the shell was not reloaded." >&2
+  echo "Installed $(git -C "$DEST" rev-parse --short HEAD), but the shell restart reported failure." >&2
   exit 4
 fi
 echo "Done. Click the globe in the bar, or press SUPER+CTRL+W."

@@ -12,28 +12,31 @@
   debounce, so the installer now pauses 2 s before the restart. Nothing signals that the rescan
   has finished, so this narrows the window rather than closing it. The README's rollback recipe
   now says the same: check out, wait, restart, never rescan.
-- **A failed restart is reported, not printed as success.** Before, the installer printed "shell
-  restarted" and exited 0 even when `omarchy-restart-shell` failed. A locked session or a
-  missing shell config makes it refuse before any kill, which leaves the previous plugin loaded.
-  It now prints the exit code and what to run, and exits 4.
-- **A rescan-only reload says what it cannot do.** The WORLDLINE service is kept loaded across a
-  rescan and keeps running the previous code until the shell restarts; the installer now says
-  so. With neither command available, it says the shell was not reloaded.
-- **`tools/check-shell-reload.mjs`**, run by the checks and release workflows, reads the
-  installer as shell structure:
-  - continuations are joined, heredoc bodies are skipped, and `if` blocks are parsed into
-    branches;
-  - every `omarchy-restart-shell` invocation must sit in one branch of the restart gate, and
-    every `rescanPlugins` in another;
-  - it refuses what it cannot follow: functions, `eval`, `source`, `sh -c`, or a gate inside a
-    loop.
+- **A failed restart is reported, not printed as success.**
+  - Before, the installer printed "shell restarted" and exited 0 whatever
+    `omarchy-restart-shell` returned, and discarded its messages.
+  - Its messages are now shown, and a failure prints the exit code and exits 4.
+  - The failure text names all three outcomes:
+    - it refused before stopping anything (a locked session, a missing shell config), so the
+      WORLDLINE service still runs the previous commit;
+    - it restarted but could not re-secure the session lock, so lock the session now;
+    - the shell may be down.
+- **A reload that is not a restart says what it cannot do.** The WORLDLINE service is kept loaded
+  across a rescan and keeps running the previous code until the shell restarts. When nothing
+  reloads, the message names the reason: `WORLDLINE_NO_SHELL_RESTART=1`, or neither command was
+  found.
+- **`tools/test-install-reload.mjs`**, run by the checks and release workflows, runs the real
+  installer in 16 environments. Each uses `env -i`, a scratch HOME and recording shims, and never
+  the host's PATH. The environments cover:
+  - `WORLDLINE_NO_SHELL_RESTART` 0 and 1;
+  - a restart command that is absent, succeeds, refuses, or fails after restarting;
+  - `omarchy-shell` absent or present.
 
-  `tools/test-check-shell-reload.mjs` holds it to 11 installers it must refuse and 4 it must
-  pass. The refused ones include the review's counterexamples: a heredoc `else:`, a continued
-  line, a restart after the block, and an echo standing in for the restart. The 1.3.3 installer
-  is refused at line 95.
-- Non-claim: the check reads the installer's own text. It does not run it or follow the commands
-  it calls.
+  In each, it checks that the installer never both rescans and restarts, and checks the exit
+  status and what the installer says. The 1.3.3 installer fails it in 15 of the 16 environments,
+  three of them by rescanning and then restarting. An earlier draft of this release used a
+  static reading of the script instead; two review rounds kept finding shapes it misjudged, so
+  it was replaced by running the installer.
 
 ## 1.3.3 — 2026-09-29 · every command the plugin runs is bounded in bytes and in time
 
