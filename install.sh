@@ -119,8 +119,12 @@ elif command -v omarchy-shell >/dev/null 2>&1; then
   omarchy-shell -q shell rescanPlugins || true
   RELOAD="rescanned"
   echo "  shell asked to rescan plugins. A WORLDLINE service the shell already had is kept loaded"
-  echo "  across a rescan and keeps running the previous code until the shell restarts: run"
-  echo "  omarchy-restart-shell."
+  echo "  across a rescan and keeps running the previous code until the shell restarts."
+  if command -v omarchy-restart-shell >/dev/null 2>&1; then
+    echo "  Run omarchy-restart-shell to load this commit."
+  else
+    echo "  Restart the shell to load this commit."
+  fi
 elif [[ "${WORLDLINE_NO_SHELL_RESTART:-0}" == "1" ]]; then
   echo "  shell not reloaded (WORLDLINE_NO_SHELL_RESTART=1, and omarchy-shell was not found to rescan):"
   echo "  restart the shell to load this commit."

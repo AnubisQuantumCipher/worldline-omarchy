@@ -14,21 +14,28 @@
 //     under test in place of install.sh;
 //   * a scratch HOME;
 //   * `env -i`, with dummy session variables (WAYLAND_DISPLAY, XDG_RUNTIME_DIR,
-//     HYPRLAND_INSTANCE_SIGNATURE);
-//   * a PATH made of recording shims for omarchy-restart-shell and omarchy-shell, shims for qs,
-//     quickshell and hyprctl that record any call as unexpected, and symlinks to basic tools. The
-//     host's omarchy tools are not on that PATH.
+//     HYPRLAND_INSTANCE_SIGNATURE, OMARCHY_PATH) that point at scratch paths; they are not a
+//     real session;
+//   * a PATH made of recording shims for omarchy-restart-shell, omarchy-shell and
+//     omarchy-plugin-validate, shims that record any call as unexpected for qs, quickshell,
+//     hyprctl and the other omarchy commands that can reload plugins (omarchy, omarchy-plugin-*,
+//     omarchy-shell-config, omarchy-launch-shell), and symlinks to basic tools. The host's omarchy
+//     tools are not on that PATH.
 // Each environment is run twice: a first install (clone), then, after a new commit, an upgrade
 // (fast-forward). The environments are WORLDLINE_NO_SHELL_RESTART 0/1, times the restart command
 // absent, succeeding, refusing before any kill (exit 1), failing after restarting with the lock
-// not re-secured (exit 1), or never becoming ready (exit 7), times omarchy-shell absent or present.
-// Each run is checked for the shim calls it made, its exit status and what it said.
+// not re-secured (exit 1), or a not-ready stand-in that exits 7 (the real command exits 1 there;
+// 7 makes the printed code testable), times omarchy-shell absent or present.
+// Each run is checked for the shim calls it made, its exit status and what it said. A restart
+// environment may make no omarchy-shell call at all; a rescan environment makes exactly one, the
+// rescan. The upgrade must really move the checkout to the fixture's new commit.
 //
 // What this observes, and what it does not:
 //   * It observes calls through PATH to the shims, made before the installer exits or within one
 //     second after.
 //   * It does not observe a call by absolute path, a command after the installer reassigns PATH,
-//     or a process that outlives that second.
+//     a process that outlives that second, or a real session's sockets.
+//   * It does not check the pause before the restart.
 //   * It covers only the environments listed above.
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync, copyFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -39,7 +46,9 @@ import { fileURLToPath } from "node:url";
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..");
 const installer = process.argv[2] ?? join(repo, "install.sh");
 const TOOLS = ["bash", "sh", "env", "git", "python3", "sleep", "mkdir", "dirname", "basename", "cat", "rm", "sed", "grep", "date", "cp", "mv", "ls", "tr", "head", "tail", "cut", "wc", "sort", "uname", "tar"];
-const UNEXPECTED = ["qs", "quickshell", "hyprctl"];
+const UNEXPECTED = ["qs", "quickshell", "hyprctl", "omarchy", "omarchy-plugin-update", "omarchy-plugin-add",
+  "omarchy-plugin-enable", "omarchy-plugin-disable", "omarchy-plugin-clone", "omarchy-plugin-remove",
+  "omarchy-shell-config", "omarchy-launch-shell"];
 
 const base = mkdtempSync(join(tmpdir(), "worldline-install-reload-"));
 const failures = [];
@@ -93,15 +102,18 @@ try {
             + (restart.message ? `echo "${restart.message}" >&2\n` : "") + `exit ${restart.rc}\n`);
         }
         if (shellPresent) shim("omarchy-shell", `echo "omarchy-shell $*" >> "${calls}"\nexit 0\n`);
+        shim("omarchy-plugin-validate", "exit 0\n");
         for (const tool of UNEXPECTED) shim(tool, `echo "UNEXPECTED ${tool} $*" >> "${calls}"\nexit 0\n`);
 
         const env = ["-i", `HOME=${home}`, `PATH=${path}:${bin}`, `WORLDLINE_NO_SHELL_RESTART=${nsr}`,
-          `XDG_RUNTIME_DIR=${runtime}`, "WAYLAND_DISPLAY=wayland-test", "HYPRLAND_INSTANCE_SIGNATURE=test"];
+          `XDG_RUNTIME_DIR=${runtime}`, "WAYLAND_DISPLAY=wayland-test", "HYPRLAND_INSTANCE_SIGNATURE=test",
+          `OMARCHY_PATH=${join(runtime, "omarchy")}`];
         const problems = [];
         for (const phase of ["install", "upgrade"]) {
           if (phase === "upgrade") {
-            writeFileSync(join(src, "README.md"), "fixture, second commit\n");
-            sh("git -c user.email=t@t -c user.name=t commit -q -am upgrade", src);
+            writeFileSync(join(src, "WORLDLINE-FIXTURE-UPGRADE"), "second commit\n");
+            const upgrade = sh("git add WORLDLINE-FIXTURE-UPGRADE && git -c user.email=t@t -c user.name=t commit -q -m upgrade", src);
+            if (upgrade.status !== 0) throw new Error(`fixture upgrade commit: ${upgrade.stderr}`);
           }
           writeFileSync(calls, "");
           const result = spawnSync("env", [...env, "bash", join(src, "install.sh")], { encoding: "utf8", timeout: 60000 });
@@ -109,6 +121,7 @@ try {
           const output = `${result.stdout}${result.stderr}`;
           const log = readFileSync(calls, "utf8").split("\n").filter(Boolean);
           const restarts = log.filter((line) => line.startsWith("omarchy-restart-shell"));
+          const shellCalls = log.filter((line) => line.startsWith("omarchy-shell"));
           const rescans = log.filter((line) => line.includes("rescanPlugins"));
           const unexpected = log.filter((line) => line.startsWith("UNEXPECTED"));
           const say = (text) => problems.push(`${phase}: ${text}`);
@@ -117,9 +130,13 @@ try {
           if (unexpected.length > 0) say(`unexpected calls: ${unexpected.join(" | ")}`);
           if (phase === "install" && !output.includes("cloned")) say("the first run must clone");
           if (phase === "upgrade" && !output.includes("fast-forwarded")) say("the second run must fast-forward");
+          const deployed = sh(`git -C '${join(home, ".config/omarchy/plugins/khephri.worldline")}' rev-parse HEAD`).stdout.trim();
+          const fixture = sh("git rev-parse HEAD", src).stdout.trim();
+          if (deployed !== fixture) say(`the checkout is at ${deployed.slice(0, 12)}, not the fixture's ${fixture.slice(0, 12)}`);
           const restartExpected = nsr === "0" && restart !== null;
           if (restartExpected) {
             if (restarts.length !== 1) say(`expected exactly one restart, saw ${restarts.length}`);
+            if (shellCalls.length !== 0) say(`a restart environment may make no omarchy-shell call: ${shellCalls.join(" | ")}`);
             if (!output.includes(restart.says)) say(`must say "${restart.says}"`);
             if (restart.rc === 0) {
               if (result.status !== 0) say(`a successful restart must exit 0, got ${result.status}`);
@@ -128,13 +145,15 @@ try {
               if (!output.includes(`exited ${restart.rc}`)) say(`a failed restart must print its exit code ${restart.rc}`);
               if (!output.includes(restart.message)) say("the restart's own message must reach the operator");
               if (!output.includes("but the shell restart reported failure.")) say("the last line must say the restart reported failure");
-              if (output.includes("shell restarted\n")) say("a failed restart must not be reported as a success");
+              if (/^\s*shell restarted\b/m.test(output)) say("a failed restart must not be reported as a success");
             }
           } else {
             if (restarts.length !== 0) say("no restart may run when it is disabled or absent");
             if (result.status !== 0) say(`expected exit 0, got ${result.status}`);
             if (shellPresent) {
               if (rescans.length !== 1) say(`expected exactly one rescan, saw ${rescans.length}`);
+              if (shellCalls.length !== 1 || shellCalls[0] !== "omarchy-shell -q shell rescanPlugins") say(`a rescan environment makes exactly one omarchy-shell call, the rescan: ${shellCalls.join(" | ")}`);
+              if (restart === null && output.includes("Run omarchy-restart-shell")) say("must not advise running an omarchy-restart-shell that is not there");
               if (!output.includes("kept loaded")) say("a rescan-only reload must say a kept service keeps the previous code");
             } else {
               if (rescans.length !== 0) say("no rescan without omarchy-shell");

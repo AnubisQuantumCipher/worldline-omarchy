@@ -25,24 +25,32 @@
   had is kept loaded across a rescan and keeps running the previous code until the shell restarts. When nothing
   reloads, the message names the reason: `WORLDLINE_NO_SHELL_RESTART=1`, or neither command was
   found.
+- **A reload that has no restart command does not advise one.** When `omarchy-restart-shell`
+  is missing, the rescan message says "restart the shell" instead of naming the command.
 - **`tools/test-install-reload.mjs`**, run by the checks and release workflows, runs the real
-  installer in 20 environments, each twice: a first install, then an upgrade.
+  installer in 20 environments, each twice: a first install, then an upgrade that must move the
+  checkout to the fixture's new commit.
   - The environments cover `WORLDLINE_NO_SHELL_RESTART` 0 and 1; a restart command that is
-    absent, succeeds, refuses, fails after restarting, or never becomes ready; and
-    `omarchy-shell` absent or present.
-  - Each run uses a fixture built from the repository, a scratch HOME, `env -i` with dummy
-    session variables, and a PATH of recording shims. `qs`, `quickshell` and `hyprctl` count as
-    unexpected calls. The host's omarchy tools are not on that PATH.
-  - Each run checks that no restart and rescan both happen, the exit status, and the text for
-    each outcome.
-  - The 1.3.3 installer fails it in 19 of the 20 environments.
-  - Round 3 of the review built eight mutants: a rescan after the fast-forward, a rescan in the
-    session only, a rescan in the background, a rescan through `qs`, the lock advice removed, a
-    hard-coded exit code, a wrong last line, and the 1.3.3 installer. The harness fails every one.
-  - Non-claims: it observes calls through PATH that are made before the installer exits or
-    within a second after. It does not observe a call by absolute path, a command after the
-    installer reassigns PATH, a longer-lived background process, or an environment it does not
-    list.
+    absent, succeeds, refuses, fails after restarting, or is a not-ready stand-in that exits 7;
+    and `omarchy-shell` absent or present.
+  - Each run uses a fixture built from the repository and a scratch HOME, under `env -i` with
+    dummy session variables that point at scratch paths.
+  - The PATH holds recording shims. Any call to `qs`, `quickshell`, `hyprctl`, `omarchy`, the
+    `omarchy-plugin-*` commands, `omarchy-shell-config` or `omarchy-launch-shell` counts as
+    unexpected. The host's omarchy tools are not on that PATH.
+  - Each run checks that no restart and rescan both happen. A restart environment may make no
+    `omarchy-shell` call, and a rescan environment makes exactly one, the rescan. It also checks
+    the exit status and the text for each outcome.
+  - The 1.3.3 installer fails it in 19 of the 20 environments. So do mutants modelled on the
+    review's findings: a rescan after the fast-forward, rescans guarded on the session, a rescan
+    in the background or through `qs`, a plugin update or enable call, and wrong or missing
+    failure texts. The mutants are recorded in the review evidence, not in this repository.
+  - Non-claims:
+    - It observes calls through PATH made before the installer exits, or within a second after.
+    - It does not observe a call by absolute path, a command after the installer reassigns PATH,
+      a longer-lived background process, or a real session's sockets.
+    - It does not check the pause before the restart.
+    - It covers only the environments it lists.
   - An earlier draft of this release read the script statically instead. Two review rounds kept
     finding shapes it misjudged, so it was replaced by running the installer.
 
