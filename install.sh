@@ -91,18 +91,41 @@ else
   echo "  bindings.lua not found — bind the keys manually if you want them"
 fi
 
-# 3. Live reload. Either restart the shell or ask it to rescan, never both: a rescan is still
+# 3. Live reload. Restart the shell, or ask it to rescan, never both: a rescan is still
 # completing plugin objects when the restart kills the shell, and quickshell 0.3.1 has already
 # freed its IPC handler registry by then, so the shell segfaults instead of exiting
 # (quickshell-mirror/quickshell#956). A restart re-reads every plugin on its own.
+#
+# Updating the checkout above also wakes the shell's own plugin watcher, which rescans after a
+# 150 ms debounce. The pause below lets that rescan settle before the restart's kill. Nothing
+# signals that it has finished, so the pause narrows that window; it does not close it.
+RELOAD="none"
 if [[ "${WORLDLINE_NO_SHELL_RESTART:-0}" != "1" ]] && command -v omarchy-restart-shell >/dev/null 2>&1; then
-  omarchy-restart-shell >/dev/null 2>&1 || true
-  echo "  shell restarted"
+  sleep 2
+  if omarchy-restart-shell >/dev/null 2>&1; then
+    RELOAD="restarted"
+    echo "  shell restarted"
+  else
+    rc=$?
+    RELOAD="failed"
+    echo "  shell restart FAILED (omarchy-restart-shell exited $rc). The shell may still be running" >&2
+    echo "  the previous plugin (a locked session or a missing shell config refuses before any kill)," >&2
+    echo "  or it may be down. Run omarchy-restart-shell to load this commit." >&2
+  fi
 elif command -v omarchy-shell >/dev/null 2>&1; then
   omarchy-shell -q shell rescanPlugins || true
-  echo "  shell asked to rescan plugins"
+  RELOAD="rescanned"
+  echo "  shell asked to rescan plugins. The WORLDLINE service is kept loaded across a rescan and"
+  echo "  keeps running the previous code until the shell restarts: run omarchy-restart-shell."
+else
+  echo "  shell not reloaded (neither omarchy-restart-shell nor omarchy-shell was found):"
+  echo "  restart the shell to load this commit."
 fi
 
+if [[ "$RELOAD" == "failed" ]]; then
+  echo "Installed $(git -C "$DEST" rev-parse --short HEAD), but the shell was not reloaded." >&2
+  exit 4
+fi
 echo "Done. Click the globe in the bar, or press SUPER+CTRL+W."
 echo "NOTE: the plugin renders the WORLDLINE engine's status; install the engine from"
 echo "      ~/Projects/worldline (./install.sh) for it to show data and perform actions."

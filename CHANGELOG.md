@@ -4,16 +4,36 @@
 
 - **`install.sh` no longer asks the shell to rescan its plugins right before restarting it.**
   quickshell 0.3.1 segfaults if a rescan is still completing plugin objects when the restart's
-  kill lands (quickshell-mirror/quickshell#956). The installer now restarts the shell when it
-  can. Only when it cannot, or `WORLDLINE_NO_SHELL_RESTART=1`, does it ask for a rescan. A
-  restart re-reads every plugin on its own. This carries the fix from draft PR #1 onto the
-  current release; the engine carries the same fix in WORLDLINE 1.9.1.
-- **`tools/check-shell-reload.mjs`**, run by the checks and release workflows, refuses any
-  `rescanPlugins` that is not in an `elif`/`else` branch of the `if` that gates
-  `omarchy-restart-shell`. It also refuses an installer with no restart gate at all.
-  - It fails on the 1.3.3 installer (line 95).
-  - It fails on a rescan in the same branch as the restart, and on a rescan after the block.
-  - It passes on this one.
+  kill lands (quickshell-mirror/quickshell#956). The installer restarts the shell when
+  `omarchy-restart-shell` exists and `WORLDLINE_NO_SHELL_RESTART` is not `1`. Otherwise it asks
+  for a rescan. A restart re-reads every plugin on its own. This carries the fix from draft PR #1
+  onto the current release; the engine carries the same fix in WORLDLINE 1.9.1.
+- **Updating the checkout also wakes the shell's own plugin watcher.** It rescans after a 150 ms
+  debounce, so the installer now pauses 2 s before the restart. Nothing signals that the rescan
+  has finished, so this narrows the window rather than closing it. The README's rollback recipe
+  now says the same: check out, wait, restart, never rescan.
+- **A failed restart is reported, not printed as success.** Before, the installer printed "shell
+  restarted" and exited 0 even when `omarchy-restart-shell` failed. A locked session or a
+  missing shell config makes it refuse before any kill, which leaves the previous plugin loaded.
+  It now prints the exit code and what to run, and exits 4.
+- **A rescan-only reload says what it cannot do.** The WORLDLINE service is kept loaded across a
+  rescan and keeps running the previous code until the shell restarts; the installer now says
+  so. With neither command available, it says the shell was not reloaded.
+- **`tools/check-shell-reload.mjs`**, run by the checks and release workflows, reads the
+  installer as shell structure:
+  - continuations are joined, heredoc bodies are skipped, and `if` blocks are parsed into
+    branches;
+  - every `omarchy-restart-shell` invocation must sit in one branch of the restart gate, and
+    every `rescanPlugins` in another;
+  - it refuses what it cannot follow: functions, `eval`, `source`, `sh -c`, or a gate inside a
+    loop.
+
+  `tools/test-check-shell-reload.mjs` holds it to 11 installers it must refuse and 4 it must
+  pass. The refused ones include the review's counterexamples: a heredoc `else:`, a continued
+  line, a restart after the block, and an echo standing in for the restart. The 1.3.3 installer
+  is refused at line 95.
+- Non-claim: the check reads the installer's own text. It does not run it or follow the commands
+  it calls.
 
 ## 1.3.3 — 2026-09-29 · every command the plugin runs is bounded in bytes and in time
 

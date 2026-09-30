@@ -95,8 +95,10 @@ restarts the shell. It is idempotent and refuses to overwrite local edits in the
 The engine's own `install.sh` performs the same fast-forward, so either path keeps the two in
 step.
 
-**Rollback:** `git -C ~/.config/omarchy/plugins/khephri.worldline checkout <commit>` then
-`omarchy-restart-shell`. The engine installer also records the plugin commit it replaced in
+**Rollback:** `git -C ~/.config/omarchy/plugins/khephri.worldline checkout <commit>`, wait a
+couple of seconds for the shell's plugin watcher to finish the rescan the checkout triggers,
+then `omarchy-restart-shell`. Do not also ask for `rescanPlugins`: a rescan still running when
+the restart kills the shell segfaults quickshell 0.3.1 (quickshell-mirror/quickshell#956). The engine installer also records the plugin commit it replaced in
 its backup directory.
 
 **Uninstall:** `omarchy plugin remove khephri.worldline` (or delete the directory and the

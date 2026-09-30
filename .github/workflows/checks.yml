@@ -23,3 +23,5 @@ jobs:
         run: node tools/check-bounded-processes.mjs
       - name: Shell-reload check (the installer restarts the shell or rescans it, never both)
         run: node tools/check-shell-reload.mjs
+      - name: Shell-reload check controls (the counterexamples it must refuse, the shapes it must pass)
+        run: node tools/test-check-shell-reload.mjs
