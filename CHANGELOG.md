@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.4 — 2026-09-30 · the installer restarts the shell or rescans it, never both
+
+- **`install.sh` no longer asks the shell to rescan its plugins right before restarting it.**
+  quickshell 0.3.1 segfaults if a rescan is still completing plugin objects when the restart's
+  kill lands (quickshell-mirror/quickshell#956). The installer now restarts the shell when it
+  can. Only when it cannot, or `WORLDLINE_NO_SHELL_RESTART=1`, does it ask for a rescan. A
+  restart re-reads every plugin on its own. This carries the fix from draft PR #1 onto the
+  current release; the engine carries the same fix in WORLDLINE 1.9.1.
+- **`tools/check-shell-reload.mjs`**, run by the checks and release workflows, refuses any
+  `rescanPlugins` that is not in an `elif`/`else` branch of the `if` that gates
+  `omarchy-restart-shell`. It also refuses an installer with no restart gate at all.
+  - It fails on the 1.3.3 installer (line 95).
+  - It fails on a rescan in the same branch as the restart, and on a rescan after the block.
+  - It passes on this one.
+
 ## 1.3.3 — 2026-09-29 · every command the plugin runs is bounded in bytes and in time
 
 From the marketplace review of 1.3.2 (omarchy-plugin-marketplace#7900): `WlCall.qml` collected a
