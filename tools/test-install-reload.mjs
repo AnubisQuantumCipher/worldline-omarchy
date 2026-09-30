@@ -16,11 +16,11 @@
 //   * `env -i`, with dummy session variables (WAYLAND_DISPLAY, XDG_RUNTIME_DIR,
 //     HYPRLAND_INSTANCE_SIGNATURE, OMARCHY_PATH) that point at scratch paths; they are not a
 //     real session;
-//   * a PATH made of recording shims for omarchy-restart-shell, omarchy-shell and
-//     omarchy-plugin-validate, shims that record any call as unexpected for qs, quickshell,
-//     hyprctl and the other omarchy commands that can reload plugins (omarchy, omarchy-plugin-*,
-//     omarchy-shell-config, omarchy-launch-shell), and symlinks to basic tools. The host's omarchy
-//     tools are not on that PATH.
+//   * a PATH made of recording shims for omarchy-restart-shell and omarchy-shell, a silent
+//     stand-in for omarchy-plugin-validate that exits 0, shims that record any call as unexpected
+//     for qs, quickshell, hyprctl, omarchy, omarchy-plugin-update/-add/-enable/-disable/-clone/
+//     -remove, omarchy-shell-config and omarchy-launch-shell, and symlinks to basic tools. The
+//     host's omarchy tools are not on that PATH.
 // Each environment is run twice: a first install (clone), then, after a new commit, an upgrade
 // (fast-forward). The environments are WORLDLINE_NO_SHELL_RESTART 0/1, times the restart command
 // absent, succeeding, refusing before any kill (exit 1), failing after restarting with the lock
@@ -35,6 +35,10 @@
 //     second after.
 //   * It does not observe a call by absolute path, a command after the installer reassigns PATH,
 //     a process that outlives that second, or a real session's sockets.
+//   * Other omarchy commands that restart or rescan the shell (omarchy-refresh-shell,
+//     omarchy-update-restart, omarchy-font-set, omarchy-voxtype-*, omarchy-bar,
+//     omarchy-install-service-*, omarchy-remove-service-*, omarchy-plugin-list,
+//     omarchy-plugin-catalog) are not on the PATH, so a call to one is not observed.
 //   * It does not check the pause before the restart.
 //   * It covers only the environments listed above.
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync, copyFileSync } from "node:fs";

@@ -35,20 +35,28 @@
     and `omarchy-shell` absent or present.
   - Each run uses a fixture built from the repository and a scratch HOME, under `env -i` with
     dummy session variables that point at scratch paths.
-  - The PATH holds recording shims. Any call to `qs`, `quickshell`, `hyprctl`, `omarchy`, the
-    `omarchy-plugin-*` commands, `omarchy-shell-config` or `omarchy-launch-shell` counts as
-    unexpected. The host's omarchy tools are not on that PATH.
+  - The PATH holds recording shims. Any call to `qs`, `quickshell`, `hyprctl`, `omarchy`,
+    `omarchy-plugin-update`, `-add`, `-enable`, `-disable`, `-clone` or `-remove`,
+    `omarchy-shell-config` or `omarchy-launch-shell` counts as unexpected.
+    `omarchy-plugin-validate` is a silent stand-in that exits 0. The host's omarchy tools are
+    not on that PATH.
   - Each run checks that no restart and rescan both happen. A restart environment may make no
     `omarchy-shell` call, and a rescan environment makes exactly one, the rescan. It also checks
     the exit status and the text for each outcome.
-  - The 1.3.3 installer fails it in 19 of the 20 environments. So do mutants modelled on the
-    review's findings: a rescan after the fast-forward, rescans guarded on the session, a rescan
-    in the background or through `qs`, a plugin update or enable call, and wrong or missing
-    failure texts. The mutants are recorded in the review evidence, not in this repository.
+  - The 1.3.3 installer fails it in 19 of the 20 environments.
+  - The harness also fails mutants modelled on the review's findings, each in the environments
+    where its mutation acts: a rescan after the fast-forward, rescans guarded on
+    `WAYLAND_DISPLAY` or `OMARCHY_PATH`, a rescan in the background or through `qs`, a plugin
+    update or enable call, and wrong or missing failure texts. The mutants are recorded in the
+    review evidence, not in this repository. A rescan guarded on a real session socket passes
+    it, as the non-claims below say.
   - Non-claims:
     - It observes calls through PATH made before the installer exits, or within a second after.
     - It does not observe a call by absolute path, a command after the installer reassigns PATH,
       a longer-lived background process, or a real session's sockets.
+    - Other omarchy commands that restart or rescan the shell (such as
+      `omarchy-refresh-shell`, `omarchy-update-restart` and `omarchy-bar`) are not on its PATH,
+      so a call to one is not observed.
     - It does not check the pause before the restart.
     - It covers only the environments it lists.
   - An earlier draft of this release read the script statically instead. Two review rounds kept
