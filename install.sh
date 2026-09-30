@@ -111,15 +111,16 @@ if [[ "${WORLDLINE_NO_SHELL_RESTART:-0}" != "1" ]] && command -v omarchy-restart
     RELOAD="failed"
     echo "  shell restart reported failure (omarchy-restart-shell exited $rc; its message is above)." >&2
     echo "  If it refused before stopping the shell (a locked session, a missing shell config), the" >&2
-    echo "  shell was not restarted and the WORLDLINE service still runs the previous commit. If it" >&2
-    echo "  restarted the shell but could not re-secure the session lock, lock the session now." >&2
+    echo "  shell was not restarted, and a WORLDLINE service it already had keeps running the previous" >&2
+    echo "  code. If it restarted the shell but could not re-secure the session lock, lock the session now." >&2
     echo "  Otherwise the shell may be down. Run omarchy-restart-shell to load this commit." >&2
   fi
 elif command -v omarchy-shell >/dev/null 2>&1; then
   omarchy-shell -q shell rescanPlugins || true
   RELOAD="rescanned"
-  echo "  shell asked to rescan plugins. The WORLDLINE service is kept loaded across a rescan and"
-  echo "  keeps running the previous code until the shell restarts: run omarchy-restart-shell."
+  echo "  shell asked to rescan plugins. A WORLDLINE service the shell already had is kept loaded"
+  echo "  across a rescan and keeps running the previous code until the shell restarts: run"
+  echo "  omarchy-restart-shell."
 elif [[ "${WORLDLINE_NO_SHELL_RESTART:-0}" == "1" ]]; then
   echo "  shell not reloaded (WORLDLINE_NO_SHELL_RESTART=1, and omarchy-shell was not found to rescan):"
   echo "  restart the shell to load this commit."

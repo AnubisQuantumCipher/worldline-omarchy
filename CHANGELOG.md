@@ -17,26 +17,34 @@
     `omarchy-restart-shell` returned, and discarded its messages.
   - Its messages are now shown, and a failure prints the exit code and exits 4.
   - The failure text names all three outcomes:
-    - it refused before stopping anything (a locked session, a missing shell config), so the
-      WORLDLINE service still runs the previous commit;
+    - it refused before stopping anything (a locked session, a missing shell config), so a
+      WORLDLINE service the shell already had keeps running the previous code;
     - it restarted but could not re-secure the session lock, so lock the session now;
     - the shell may be down.
-- **A reload that is not a restart says what it cannot do.** The WORLDLINE service is kept loaded
-  across a rescan and keeps running the previous code until the shell restarts. When nothing
+- **A reload that is not a restart says what it cannot do.** A WORLDLINE service the shell already
+  had is kept loaded across a rescan and keeps running the previous code until the shell restarts. When nothing
   reloads, the message names the reason: `WORLDLINE_NO_SHELL_RESTART=1`, or neither command was
   found.
 - **`tools/test-install-reload.mjs`**, run by the checks and release workflows, runs the real
-  installer in 16 environments. Each uses `env -i`, a scratch HOME and recording shims, and never
-  the host's PATH. The environments cover:
-  - `WORLDLINE_NO_SHELL_RESTART` 0 and 1;
-  - a restart command that is absent, succeeds, refuses, or fails after restarting;
-  - `omarchy-shell` absent or present.
-
-  In each, it checks that the installer never both rescans and restarts, and checks the exit
-  status and what the installer says. The 1.3.3 installer fails it in 15 of the 16 environments,
-  three of them by rescanning and then restarting. An earlier draft of this release used a
-  static reading of the script instead; two review rounds kept finding shapes it misjudged, so
-  it was replaced by running the installer.
+  installer in 20 environments, each twice: a first install, then an upgrade.
+  - The environments cover `WORLDLINE_NO_SHELL_RESTART` 0 and 1; a restart command that is
+    absent, succeeds, refuses, fails after restarting, or never becomes ready; and
+    `omarchy-shell` absent or present.
+  - Each run uses a fixture built from the repository, a scratch HOME, `env -i` with dummy
+    session variables, and a PATH of recording shims. `qs`, `quickshell` and `hyprctl` count as
+    unexpected calls. The host's omarchy tools are not on that PATH.
+  - Each run checks that no restart and rescan both happen, the exit status, and the text for
+    each outcome.
+  - The 1.3.3 installer fails it in 19 of the 20 environments.
+  - Round 3 of the review built eight mutants: a rescan after the fast-forward, a rescan in the
+    session only, a rescan in the background, a rescan through `qs`, the lock advice removed, a
+    hard-coded exit code, a wrong last line, and the 1.3.3 installer. The harness fails every one.
+  - Non-claims: it observes calls through PATH that are made before the installer exits or
+    within a second after. It does not observe a call by absolute path, a command after the
+    installer reassigns PATH, a longer-lived background process, or an environment it does not
+    list.
+  - An earlier draft of this release read the script statically instead. Two review rounds kept
+    finding shapes it misjudged, so it was replaced by running the installer.
 
 ## 1.3.3 — 2026-09-29 · every command the plugin runs is bounded in bytes and in time
 
