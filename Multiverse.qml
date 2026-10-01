@@ -78,7 +78,7 @@ Item {
   property var rootsDryRun: null
   property var rootsPendingRemove: null
   property string rootsError: ""
-  property bool rootsBusy: rootsCall.busy
+  property bool rootsBusy: rootsCall.busy || rootsListCall.busy || root.rootsResolving !== ""
   property string rootsConfirmKind: ""
   property bool rootsConfirmOpen: false
 
@@ -90,6 +90,9 @@ Item {
   readonly property int motionDuration: motionEnabled ? 520 : 0
   readonly property string signalState: Model.signal(status, nowMs)
   readonly property bool live: signalState === "live" && !fixture
+  // Whether the running engine is the one this plugin was built for (its code set, 1.3.5, OB-195).
+  // Every WlCall below carries it, so no mutating command reaches an incompatible engine.
+  readonly property var engine: Model.engineCompatibility(status)
   readonly property bool initialized: status !== null && status.prime !== null && status.prime !== undefined
   readonly property var worlds: status && Array.isArray(status.worlds) ? status.worlds : []
   readonly property var jobs: status && Array.isArray(status.jobs) ? status.jobs : []
@@ -144,7 +147,7 @@ Item {
   }
 
   function dismiss() {
-    if (root.mode === "collapse" && (collapsePanel.prepared || collapsePanel.phase === "preparing")) {
+    if (root.mode === "collapse" && (collapsePanel.prepared || collapsePanel.holdsTransaction || collapsePanel.phase === "preparing")) {
       root.pendingDismiss = true
       collapsePanel.abort()
       return
@@ -252,6 +255,7 @@ Item {
   function runAction(argv, label, onDone) {
     if (root.fixture) { root.actionError = "fixture data — " + label + " is disabled"; return }
     if (!root.live) { root.actionError = "daemon signal is " + root.signalState + " — " + label + " is disabled"; return }
+    if (Model.isMutatingArgv(argv) && !root.engine.compatible) { root.actionError = "incompatible engine — " + label + " was not sent: " + root.engine.reason; return }
     if (actionCall.busy) { root.actionError = "another action is still running"; return }
     root.actionError = ""
     root.actionNotice = label + "…"
@@ -262,7 +266,8 @@ Item {
       } else {
         var failure = Model.parseCliError(stderr, exitCode)
         root.actionNotice = ""
-        root.actionError = label + ": " + failure.code + ": " + failure.message
+        // A stopped or unknown outcome is said to be unknown, not read as a refusal.
+        root.actionError = Model.actionFailureText(label, failure)
       }
       keyCatcher.forceActiveFocus()
     })
@@ -328,6 +333,46 @@ Item {
     })
   }
 
+  // A root add or remove the plugin stopped at its deadline may still complete in the engine
+  // (moving a large directory takes long). Its outcome is read from `worldline root list` until
+  // the engine shows it, or the re-query budget is spent (1.3.5, OB-178).
+  property string rootsResolving: ""       // "add" | "remove" while a stopped root change is read back
+  property string rootsResolvingPath: ""
+  property int rootsResolveCount: 0
+  property int rootsResolvePolls: 900
+  property int rootsResolvePollMs: 2000
+
+  function rootsStartResolving(kind, path, failure) {
+    root.rootsResolving = kind
+    root.rootsResolvingPath = path
+    root.rootsResolveCount = 0
+    root.rootsError = "outcome unknown: the plugin stopped `worldline root " + kind + "` (" + failure.code + "); reading `worldline root list` until the engine shows " + path + (kind === "add" ? " registered" : " removed")
+    rootsResolveStep()
+  }
+
+  function rootsResolveStep() {
+    if (root.rootsResolving === "") return
+    root.rootsResolveCount += 1
+    var kind = root.rootsResolving
+    var path = root.rootsResolvingPath
+    rootsListCall.run(["worldline", "root", "list", "--json"], function(exitCode, stdout, stderr) {
+      var roots = null
+      if (exitCode === 0) { try { roots = JSON.parse(stdout) } catch (error) { roots = null } }
+      var result = Model.rootOutcome(kind, path, roots)
+      if (result === "done") {
+        root.rootsResolving = ""
+        root.rootsError = ""
+        root.actionNotice = (kind === "add" ? "registered " : "removed ") + path + " (the engine's root list shows it, after the CLI was stopped)"
+        root.refreshDoctor(false)
+      } else if (root.rootsResolveCount >= root.rootsResolvePolls) {
+        root.rootsResolving = ""
+        root.rootsError = "outcome not confirmed: the engine's root list still does not show " + path + (kind === "add" ? " registered" : " removed") + " after the CLI was stopped; check `worldline root list` and `worldline doctor` before trying again"
+      } else {
+        rootsResolveTimer.restart()
+      }
+    })
+  }
+
   function rootsApply() {
     if (!root.rootsDryRun || !root.live) return
     var path = root.rootsPath.trim()
@@ -341,7 +386,8 @@ Item {
         root.refreshDoctor(false)
       } else {
         var failure = Model.parseCliError(stderr, exitCode)
-        root.rootsError = failure.code + ": " + failure.message
+        if (Model.wasStopped(failure)) root.rootsStartResolving("add", path, failure)
+        else root.rootsError = Model.actionFailureText("root add", failure)
       }
       keyCatcher.forceActiveFocus()
     })
@@ -373,7 +419,8 @@ Item {
         root.refreshDoctor(false)
       } else {
         var failure = Model.parseCliError(stderr, exitCode)
-        root.rootsError = failure.code + ": " + failure.message
+        if (Model.wasStopped(failure)) root.rootsStartResolving("remove", path, failure)
+        else root.rootsError = Model.actionFailureText("root remove", failure)
       }
       keyCatcher.forceActiveFocus()
     })
@@ -410,13 +457,15 @@ Item {
 
   // ------------------------------------------------------------ plumbing
 
-  WlCall { id: adaptersCall; environment: root.cliEnvironment; seconds: 60 }
-  WlCall { id: doctorCall; environment: root.cliEnvironment; seconds: 300 }
-  WlCall { id: actionCall; environment: root.cliEnvironment; seconds: 300 }
+  WlCall { id: adaptersCall; environment: root.cliEnvironment; engine: root.engine; seconds: 60 }
+  WlCall { id: doctorCall; environment: root.cliEnvironment; engine: root.engine; seconds: 300 }
+  WlCall { id: actionCall; environment: root.cliEnvironment; engine: root.engine; seconds: 300 }
   // The agent's stderr is the one input here an agent writes directly: read by bytes, not lines.
-  WlCall { id: logCall; environment: root.cliEnvironment; seconds: 15; stdoutBytes: 65536; stderrBytes: 16384 }
+  WlCall { id: logCall; environment: root.cliEnvironment; engine: root.engine; seconds: 15; stdoutBytes: 65536; stderrBytes: 16384 }
   // Registering or removing a root moves the directory; that can take long on a large one.
-  WlCall { id: rootsCall; environment: root.cliEnvironment; seconds: 3600 }
+  WlCall { id: rootsCall; environment: root.cliEnvironment; engine: root.engine; seconds: 3600 }
+  WlCall { id: rootsListCall; environment: root.cliEnvironment; engine: root.engine; seconds: 60 }
+  Timer { id: rootsResolveTimer; interval: root.rootsResolvePollMs; repeat: false; onTriggered: root.rootsResolveStep() }
 
   FileView {
     id: statusFile
@@ -633,6 +682,28 @@ Item {
           }
         }
 
+        // incompatible engine banner (1.3.5, OB-195): nothing mutating is sent to it
+        Rectangle {
+          Layout.fillWidth: true
+          visible: !root.fixture && root.status !== null && !root.engine.compatible
+          implicitHeight: engineText.implicitHeight + Style.spacing.md
+          color: Util.alpha(Color.urgent, 0.10)
+          border.color: Util.alpha(Color.urgent, 0.5)
+          border.width: 1
+          radius: Style.cornerRadius
+          Text {
+            id: engineText
+            textFormat: Text.PlainText
+            anchors.fill: parent
+            anchors.margins: Style.spacing.sm
+            text: "INCOMPATIBLE ENGINE — nothing that changes state is sent: " + root.engine.reason + ". Reading status, doctor and records still works."
+            color: Color.urgent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+        }
+
         // ---------------------------------------------------- body
         Item {
           Layout.fillWidth: true
@@ -651,6 +722,7 @@ Item {
             fixture: root.fixture
             primeLabel: root.primeLabel
             cliEnvironment: root.cliEnvironment
+            engine: root.engine
             onBack: root.mode = "multiverse"
             onRequestFocus: keyCatcher.forceActiveFocus()
             onRefreshAdapters: root.refreshAdapters(true)
@@ -981,15 +1053,11 @@ Item {
                     k: "STATE"
                     v: root.receipt && root.receipt.atomicCollapse ? String(root.receipt.atomicCollapse.state || "—") + " · " + String(root.receipt.atomicCollapse.mechanism || "") : "—"
                   }
+                  // PROVED only for a verified status (1.3.5, OB-084): Model.invariantLabel.
                   WlKV {
                     k: "INVARIANTS"
-                    v: {
-                      var ip = root.receipt ? root.receipt.invariantPreservation : null
-                      if (!ip) return "—"
-                      if (typeof ip === "string") return ip
-                      return String(ip.state || "?") + (ip.checks ? " · " + Number(ip.checks) + " checks" : "") + (ip.reason ? " · " + ip.reason : "")
-                    }
-                    vColor: root.receipt && root.receipt.invariantPreservation && root.receipt.invariantPreservation.state === "PROVED" ? Color.accent : Color.foreground
+                    v: Model.invariantLabel(root.receipt ? root.receipt.invariantPreservation : null).text
+                    vColor: Model.invariantLabel(root.receipt ? root.receipt.invariantPreservation : null).proved ? Color.accent : Color.foreground
                   }
                   WlKV {
                     k: "CANDIDATE"

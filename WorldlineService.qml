@@ -20,6 +20,9 @@ Item {
   property string recommendationId: ""
   property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR")
   property string lastRaw: ""
+  // Whether the running engine is the one this plugin was built for (1.3.5, OB-195). The cockpit
+  // computes the same from its own status read and sends no mutating command when it is not.
+  readonly property var engine: Model.engineCompatibility(root.lastGoodStatus)
 
   function applyStatus(raw) {
     var text = String(raw || "")

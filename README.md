@@ -66,7 +66,17 @@ the engine computes them against the *current* PRIME when it prepares the transa
 
 When the daemon is offline the cockpit says **NO SIGNAL** and tells you how to check it; when
 the heartbeat is stale, every consequential control is disabled and says why. A refused
-collapse says `DENIED — NOTHING WAS WRITTEN` with the kernel's decision code and the paths.
+collapse displays the engine's decision code and paths. If a commit response is incomplete or
+the command stops before answering, the cockpit reads the transaction back: COMMITTED stays
+committed with any warning, a confirmed refusal stays refused, and an unresolved result says
+that PRIME may have changed. Check the transaction before retrying an unresolved operation.
+
+This checkout is the unreleased 1.3.5 candidate. Its code vocabulary targets the WORLDLINE 1.9.2
+candidate; the exact release pairing is not assigned yet. An older engine that does not publish
+`daemon.codeSetSha256`, or an engine with a different vocabulary, remains readable but receives
+no mutating command from this plugin.
+The inventory's engine commit identifies its source vocabulary; the external engine release
+manifest must bind the final engine and plugin commits before this is a released pair.
 
 ## Requirements
 
@@ -74,7 +84,7 @@ collapse says `DENIED — NOTHING WAS WRITTEN` with the kernel's decision code a
 |---|---|
 | **Omarchy** ≥ 4 | the shell that hosts the plugin (`omarchy-shell` / Quickshell) |
 | **Hyprland** | Wayland compositor (layer-shell overlay, key bindings) |
-| **WORLDLINE engine ≥ 1.1.0** | `worldline` + `worldlined`; the plugin needs `collapse --prepare`, `transaction …`, `cancel`, `--dry-run`, and `doctor`'s integrity fields. Without the engine it renders NO SIGNAL and every action stays disabled. |
+| **Compatible WORLDLINE engine** | `worldline` + `worldlined`; its `daemon.codeSetSha256` must match this plugin's declared vocabulary before a mutating command is sent. The candidate targets WORLDLINE 1.9.2; exact release pairing is pending. Without the engine it renders NO SIGNAL. |
 
 ## Install
 

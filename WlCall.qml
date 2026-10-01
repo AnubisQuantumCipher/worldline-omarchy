@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell.Io
+import "Model.js" as Model
 
 // One `worldline …` invocation at a time. Every action the cockpit takes goes through the
 // CLI as an argv array (never a shell string), so an agent-chosen alias or path is data.
@@ -19,6 +20,11 @@ import Quickshell.Io
 // receives exit 137 and a `worldline: CLI_OUTPUT_TOO_LARGE: …` or `worldline: CLI_DEADLINE: …`
 // line on stderr, which Model.parseCliError reads like any other refusal. A command that cannot
 // be started reports `worldline: CLI_UNAVAILABLE: …` the same way.
+//
+// A mutating `worldline` command (Model.isMutatingArgv) is run only when `engine` says the running
+// engine is compatible (Model.engineCompatibility, 1.3.5, OB-195); otherwise `done` receives exit 1
+// and `worldline: ENGINE_INCOMPATIBLE: …` without anything being started. `engine` defaults to
+// incompatible, so a call whose owner never established compatibility cannot mutate.
 Item {
   id: root
 
@@ -28,6 +34,8 @@ Item {
   // Extra environment for the CLI. The isolated-daemon harness sets HOME/XDG_* here so every
   // command addresses the private daemon instead of the operator's real one.
   property var environment: ({})
+  // The running engine's compatibility with this plugin (Model.engineCompatibility(status)).
+  property var engine: ({ compatible: false, reason: "no engine compatibility was established for this command" })
   // The bounds of a call that names none of its own.
   property int seconds: 120
   property int stdoutBytes: 1048576
@@ -43,6 +51,12 @@ Item {
 
   function run(argv, done, limits) {
     if (process.running) return false
+    var refusal = Model.commandRefusal(root.engine || { compatible: false, reason: "no engine compatibility was established" }, argv)
+    if (refusal !== "") {
+      root.lastCommand = argv.join(" ")
+      Qt.callLater(function() { done(1, "", refusal, { stdoutBytes: 0 }) })
+      return true
+    }
     var given = limits || {}
     root._limits = {
       seconds: given.seconds > 0 ? given.seconds : root.seconds,

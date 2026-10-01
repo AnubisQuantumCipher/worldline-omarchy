@@ -17,6 +17,16 @@ jobs:
         run: python3 -c 'import json; m=json.load(open("manifest.json")); assert m["id"]=="khephri.worldline" and set(m["kinds"])=={"service","overlay","bar-widget"}'
       - name: Model.js unit tests
         run: node tools/test-model.mjs
+      - name: Engine code vocabulary and compatibility digest
+        run: node tools/check-code-table.mjs
+      - name: Final release pair validator fixtures
+        run: python3 tools/test-release-pair.py -v
+      - name: Qt modules for isolated panel rendering
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qt6-declarative-dev-tools qml6-module-qttest qml6-module-qtquick qml6-module-qtquick-layouts qml6-module-qtquick-window qml6-module-qtqml-workerscript
+      - name: Commit outcome and proof label rendering
+        run: node tools/test-collapse-panel.mjs
       - name: Plain-text sink check (every QML string stays out of a markup renderer)
         run: node tools/check-plain-text.mjs
       - name: Bounded-process check (every Process is bounded in bytes and in time)

@@ -3,14 +3,16 @@
 //   node tools/test-model.mjs
 // Loads Model.js as plain JS (drops the .pragma line) and checks the derivations the cockpit
 // and the bar rely on: status parsing, signal/staleness, evidence vocabulary, default
-// selection, sibling ranking, doctor rows, and CLI error parsing.
+// selection, sibling ranking, doctor rows, CLI error parsing, and (1.3.5) the commit outcome,
+// the code table, the invariant label and engine compatibility.
+//   node tools/test-model.mjs [MODEL_JS]   test another Model.js (a mutant, an older release)
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import assert from "node:assert/strict";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const source = readFileSync(join(here, "..", "Model.js"), "utf8").replace(".pragma library", "");
+const source = readFileSync(process.argv[2] ?? join(here, "..", "Model.js"), "utf8").replace(".pragma library", "");
 const exportsList = [
   "parseStatus", "signal", "daemonAgeMs", "evidence", "evidenceLabel", "checkStatusLabel",
   "defaultSelection", "siblingComparison", "integrityRows", "openTransactions", "capabilityRows",
@@ -18,9 +20,15 @@ const exportsList = [
   "canCollapse", "canReturnTo", "isPrimeGeneration", "widgetSetting", "runningJobCount",
   "activeJob", "stateCounts", "fmtDuration", "shortHash", "shortAlias", "displayAlias", "jobLabel", "fmtBytes",
   "notificationBody", "logTail",
+  // 1.3.5
+  "commitOutcome", "codeInfo", "refusalAdvice", "invariantLabel", "engineCompatibility", "isMutatingArgv",
+  "commandRefusal", "postCommitWarnings", "parseRecord", "preparedAfterStop", "prepareOutcome", "wasStopped",
+  "rootOutcome", "actionFailureText", "CODE_TABLE", "PLUGIN_CODES", "PLANNED_CODES", "SUPPORTED_CODE_SET_SHA256",
 ];
 const M = {};
-new Function("exports", source + ";" + exportsList.map((n) => `exports.${n}=${n};`).join(""))(M);
+// A name an older Model.js lacks is exported as undefined, so each test that needs it fails on its
+// own instead of the whole file failing to load.
+new Function("exports", source + ";" + exportsList.map((n) => `exports.${n}=typeof ${n}==="undefined"?undefined:${n};`).join(""))(M);
 
 let passed = 0;
 function test(name, fn) {
@@ -179,6 +187,265 @@ test("logTail: each line is capped at maxChars", () => {
   assert.equal(shown[0], "short");
   assert.equal(shown[1].length, 2000);
   assert.ok(shown[1].endsWith("…"));
+});
+
+// ------------------------------------------------------------------ 1.3.5: commit outcome
+// OB-193 / OB-178 / OB-128: the plugin says "not committed" only when the engine reports the
+// transaction ABORTED or DENIED (or still open and not exchanged), COMMITTED with the failure as a
+// warning when the engine reports COMMITTED, and "outcome not confirmed" otherwise.
+const TX = "7f3c1e2a-5b6d-4e8f-9a0b-1c2d3e4f5a6b";
+const NOFILE = "No file under a managed root changed";
+const cli = (name) => JSON.parse(readFileSync(join(here, "fixtures", "cli", `${name}.json`), "utf8"));
+const failureOf = (name) => M.parseCliError(cli(name).stderr, cli(name).exitCode);
+const recordOf = (name) => JSON.parse(cli(name).stdout);
+const deadline = { code: "CLI_DEADLINE", message: "worldline transaction did not finish within 1800 s", details: null };
+
+test("commitOutcome: COMMIT_DURABILITY_UNCERTAIN with details.state COMMITTED is committed with the warning", () => {
+  const o = M.commitOutcome(failureOf("commit-durability-uncertain"), null, { transactionId: TX });
+  assert.equal(o.kind, "committed");
+  assert.ok(o.warning.includes("COMMIT_DURABILITY_UNCERTAIN"));
+  assert.ok(!o.caption.includes(NOFILE));
+});
+test("commitOutcome: a post-commit error with the engine's record COMMITTED (1.9.1) is committed", () => {
+  const o = M.commitOutcome(failureOf("commit-prime-watch-after-commit-1.9.1"), recordOf("show-committed-1.9.1"), { transactionId: TX });
+  assert.equal(o.kind, "committed");
+  assert.ok(o.warning.includes("PRIME_WATCH_UNAVAILABLE"));
+});
+test("commitOutcome: DENIED and ABORTED records are not committed, with the no-file caption", () => {
+  for (const [failure, record] of [["commit-conflict-1.9.1", "show-denied-1.9.1"], ["commit-foreign-managed-write-1.9.1", "show-denied-fmw-1.9.1"]]) {
+    const o = M.commitOutcome(failureOf(failure), recordOf(record), { transactionId: TX });
+    assert.equal(o.kind, "not-committed", failure);
+    assert.equal(o.title, "NOT COMMITTED");
+    assert.ok(o.caption.includes(NOFILE));
+  }
+  const aborted = M.commitOutcome(deadline, recordOf("show-aborted-1.9.2"), { transactionId: TX, stopped: true });
+  assert.equal(aborted.kind, "not-committed");
+});
+test("commitOutcome: details.state DENIED with exchanged false is not committed without a record", () => {
+  const o = M.commitOutcome(failureOf("commit-prime-changed-1.9.2"), null, { transactionId: TX });
+  assert.equal(o.kind, "not-committed");
+});
+test("commitOutcome: PREPARED with exchanged false after a refusal is an open transaction, not committed", () => {
+  const o = M.commitOutcome(failureOf("commit-proof-unevaluable-1.9.2"), recordOf("show-prepared-1.9.2"), { transactionId: TX });
+  assert.equal(o.kind, "open");
+  assert.ok(o.title.startsWith("NOT COMMITTED — TRANSACTION STILL OPEN"));
+  assert.ok(o.caption.includes(NOFILE));
+});
+test("commitOutcome: an engine that does not report exchanged (1.9.1) leaves PREPARED not confirmed", () => {
+  const o = M.commitOutcome(failureOf("commit-internal-error"), recordOf("show-prepared-1.9.1"), { transactionId: TX });
+  assert.equal(o.kind, "unknown");
+  assert.ok(o.title.startsWith("OUTCOME NOT CONFIRMED"));
+  assert.ok(!o.caption.includes(NOFILE));
+});
+test("commitOutcome: a failed show, or no record at all, is not confirmed", () => {
+  for (const failure of [failureOf("commit-internal-error"), failureOf("commit-conflict-1.9.1"), { code: "SOMETHING_NEW", message: "?", details: null }]) {
+    const o = M.commitOutcome(failure, null, { transactionId: TX, showFailure: failureOf("show-daemon-unavailable") });
+    assert.equal(o.kind, "unknown", failure.code);
+    assert.ok(!o.caption.includes(NOFILE));
+  }
+});
+test("commitOutcome: a stopped commit whose transaction is not terminal is pending, then not confirmed", () => {
+  const pending = M.commitOutcome(deadline, recordOf("show-authorized-1.9.2"), { transactionId: TX, stopped: true });
+  assert.equal(pending.kind, "pending");
+  assert.ok(pending.title.startsWith("OUTCOME UNKNOWN"));
+  const last = M.commitOutcome(deadline, recordOf("show-authorized-1.9.2"), { transactionId: TX, stopped: true, final: true });
+  assert.equal(last.kind, "unknown");
+  const committed = M.commitOutcome(deadline, recordOf("show-committed-1.9.2"), { transactionId: TX, stopped: true });
+  assert.equal(committed.kind, "committed");
+});
+test("commitOutcome: exchanged true on a transaction that is not COMMITTED is not confirmed", () => {
+  const o = M.commitOutcome(failureOf("commit-internal-error"), recordOf("show-authorized-exchanged-quarantined-1.9.2"), { transactionId: TX });
+  assert.equal(o.kind, "unknown");
+  assert.ok(o.caption.includes("exchange"));
+});
+test("commitOutcome: a record for another transaction is not evidence about this one", () => {
+  const other = { ...recordOf("show-denied-1.9.1"), transactionId: "another" };
+  assert.equal(M.commitOutcome(failureOf("commit-internal-error"), other, { transactionId: TX }).kind, "unknown");
+});
+test("commitOutcome: missing identity and contradictory terminal exchange facts stay unknown", () => {
+  const failure = failureOf("commit-internal-error");
+  for (const record of [
+    { state: "COMMITTED", exchanged: true },
+    { state: "COMMITTED", transactionId: TX, exchanged: false },
+    { state: "ABORTED", transactionId: TX, exchanged: true },
+    { state: "DENIED", transactionId: TX, exchanged: true },
+  ]) {
+    const outcome = M.commitOutcome(failure, record, { transactionId: TX });
+    assert.equal(outcome.kind, "unknown", JSON.stringify(record));
+    assert.ok(!outcome.caption.includes(NOFILE));
+  }
+  for (const details of [
+    { state: "COMMITTED", transactionId: "another" },
+    { state: "COMMITTED", transactionId: TX, exchanged: false },
+  ])
+    assert.equal(M.commitOutcome({ ...failure, details }, null, { transactionId: TX }).kind, "unknown");
+});
+test("commitOutcome: only the not-committed classes carry the no-file caption", () => {
+  const cases = [
+    [failureOf("commit-durability-uncertain"), null, {}],
+    [failureOf("commit-internal-error"), null, {}],
+    [deadline, recordOf("show-authorized-1.9.2"), { stopped: true }],
+    [failureOf("commit-conflict-1.9.1"), recordOf("show-denied-1.9.1"), {}],
+    [failureOf("commit-proof-unevaluable-1.9.2"), recordOf("show-prepared-1.9.2"), {}],
+    [failureOf("commit-internal-error"), recordOf("show-prepared-1.9.1"), {}],
+  ];
+  for (const [failure, record, options] of cases) {
+    const o = M.commitOutcome(failure, record, { transactionId: TX, ...options });
+    const says = `${o.title} ${o.caption} ${o.warning || ""}`.includes(NOFILE);
+    assert.equal(says, o.kind === "not-committed" || o.kind === "open", `${o.kind}: ${o.caption}`);
+  }
+});
+test("wasStopped: the plugin's own stops are CLI_DEADLINE and CLI_OUTPUT_TOO_LARGE", () => {
+  assert.equal(M.wasStopped(deadline), true);
+  assert.equal(M.wasStopped({ code: "CLI_OUTPUT_TOO_LARGE" }), true);
+  assert.equal(M.wasStopped(failureOf("commit-conflict-1.9.1")), false);
+});
+test("postCommitWarnings: a committed result's postCommit entries become warnings", () => {
+  const result = JSON.parse(cli("commit-committed-postcommit-1.9.2").stdout);
+  const warnings = M.postCommitWarnings(result);
+  assert.equal(warnings.length, 1);
+  assert.ok(warnings[0].includes("PRIME_WATCH_UNAVAILABLE"));
+  assert.deepEqual(M.postCommitWarnings(JSON.parse(cli("commit-committed-1.9.1").stdout)), []);
+  assert.deepEqual(M.postCommitWarnings({ postCommit: { warnings: ["export failed"] } }), ["export failed"]);
+});
+test("parseRecord: a transaction record parses; anything else is null", () => {
+  assert.equal(M.parseRecord(cli("show-committed-1.9.1").stdout).state, "COMMITTED");
+  assert.equal(M.parseRecord("{"), null);
+  assert.equal(M.parseRecord("[]"), null);
+});
+test("prepareOutcome: a prepare stopped at its deadline is resolved from the transaction list", () => {
+  const listing = JSON.parse(cli("list-prepared-after-deadline-1.9.1").stdout);
+  const world = { alias: "w1", instanceId: "3a9f0c1d-2b3e-4f50-8a1b-c2d3e4f5a6b7" };
+  const found = M.preparedAfterStop(listing, world, "collapse", Date.parse("2026-09-30T11:00:00Z"));
+  assert.equal(found.transactionId, TX);
+  assert.equal(M.preparedAfterStop(listing, world, "return", Date.parse("2026-09-30T11:00:00Z")), null);
+  assert.equal(M.preparedAfterStop(listing, { alias: "other", instanceId: "x" }, "collapse", 0), null);
+  assert.equal(M.preparedAfterStop([{ ...listing[0], createdAt: "2020-01-01T00:00:00Z" }], world, "collapse", Date.parse("2026-09-30T11:00:00Z")), null);
+  assert.equal(M.prepareOutcome(found, {}).kind, "prepared-unreviewed");
+  assert.equal(M.prepareOutcome({ ...found, state: "DENIED" }, {}).kind, "denied");
+  assert.equal(M.prepareOutcome(null, {}).kind, "pending");
+  assert.equal(M.prepareOutcome(null, { final: true }).kind, "unknown");
+});
+test("rootOutcome: a stopped root add or remove is resolved from the root list", () => {
+  const roots = [{ path: "/home/op/project", rootKey: "rk", kind: "repo", primary: true }];
+  assert.equal(M.rootOutcome("add", "/home/op/project", roots), "done");
+  assert.equal(M.rootOutcome("add", "/home/op/other", roots), "not-yet");
+  assert.equal(M.rootOutcome("remove", "/home/op/other", roots), "done");
+  assert.equal(M.rootOutcome("remove", "/home/op/project", roots), "not-yet");
+  assert.equal(M.rootOutcome("add", "/x", null), "unknown");
+});
+
+// ------------------------------------------------------------------ 1.3.5: code table (OB-194)
+const engineCodes = JSON.parse(readFileSync(join(here, "engine-codes.json"), "utf8"));
+test("code table: every code of the paired engine has an outcome class and advice", () => {
+  assert.ok(M.CODE_TABLE, "Model.CODE_TABLE exists");
+  const missing = engineCodes.codes.filter((code) => !M.CODE_TABLE[code]);
+  assert.deepEqual(missing, []);
+  for (const code of engineCodes.codes) {
+    const info = M.codeInfo(code);
+    assert.ok(["refused", "committed", "unknown", "record"].includes(info.outcome), code);
+    assert.ok(info.advice.trim().length >= 30, code);
+  }
+});
+test("code table: FOREIGN_MANAGED_WRITE is refused, COMMIT_DURABILITY_UNCERTAIN is committed, CLI_DEADLINE is unknown", () => {
+  assert.equal(M.codeInfo("FOREIGN_MANAGED_WRITE").outcome, "refused");
+  assert.ok(M.refusalAdvice("FOREIGN_MANAGED_WRITE").includes("outside"));
+  assert.equal(M.codeInfo("COMMIT_DURABILITY_UNCERTAIN").outcome, "committed");
+  assert.equal(M.codeInfo("CLI_DEADLINE").outcome, "unknown");
+  assert.equal(M.codeInfo("INTERNAL_ERROR").outcome, "unknown");
+});
+test("code table: an unknown code is named as unknown, not explained away", () => {
+  const info = M.codeInfo("SOMETHING_NEW");
+  assert.equal(info.known, false);
+  assert.equal(info.outcome, "unknown");
+  assert.ok(info.advice.includes("SOMETHING_NEW"));
+});
+test("code table: the plugin declares the paired engine's code-set digest", () => {
+  assert.equal(M.SUPPORTED_CODE_SET_SHA256, engineCodes.codeSetSha256);
+});
+
+// ------------------------------------------------------------------ 1.3.5: invariants (OB-084)
+const verifiedProof = () => JSON.parse(readFileSync(join(here, "fixtures", "proof-status-verified-1.9.2.json"), "utf8"));
+test("invariantLabel: PROVED requires the engine's complete named verification roster", () => {
+  const v191 = JSON.parse(cli("commit-committed-1.9.1").stdout).receipt.invariantPreservation;
+  const old = M.invariantLabel(v191);
+  assert.equal(old.proved, false);
+  assert.ok(!old.text.startsWith("PROVED ·") && old.text.includes("1.9.1 rules"));
+  const verified = M.invariantLabel(verifiedProof());
+  assert.equal(verified.proved, true);
+  assert.ok(verified.text.startsWith("PROVED"));
+  for (const bad of [{ state: "PROVED", verification: { floor: "FAIL" } }, { state: "PROVED", verification: {} },
+    { state: "PROVED", verification: { floor: "PASS" } }, { state: "PROVED", verification: [{ check: "floor", outcome: "PASS" }] }])
+    assert.equal(M.invariantLabel(bad).proved, false, JSON.stringify(bad));
+  for (const state of ["MANIFEST_ONLY", "TEST_LIBRARY", "UNVERIFIED", "SOMETHING"]) {
+    const label = M.invariantLabel({ state, reason: "r" });
+    assert.equal(label.proved, false, state);
+    assert.ok(label.text.includes("not proved"), state);
+  }
+  assert.equal(M.invariantLabel(null).text, "—");
+});
+test("invariantLabel: missing, unknown, duplicate and non-passing proof checks never label PROVED", () => {
+  for (const check of verifiedProof().verification.checks) {
+    const missing = verifiedProof();
+    missing.verification.checks = missing.verification.checks.filter((entry) => entry.name !== check.name);
+    assert.equal(M.invariantLabel(missing).proved, false, `missing ${check.name}`);
+    for (const value of [false, null, "PASS", "UNKNOWN", 1]) {
+      const failed = verifiedProof();
+      failed.verification.checks.find((entry) => entry.name === check.name).ok = value;
+      assert.equal(M.invariantLabel(failed).proved, false, `${check.name}: ${value}`);
+    }
+  }
+  const duplicate = verifiedProof();
+  duplicate.verification.checks.push(duplicate.verification.checks[0]);
+  assert.equal(M.invariantLabel(duplicate).proved, false);
+  const unknown = verifiedProof();
+  unknown.verification.checks.push({ name: "unknown-check", ok: true });
+  assert.equal(M.invariantLabel(unknown).proved, false);
+  for (const change of [{ evaluable: false }, { proofGate: "skipped" }, { checks: null }, { checks: "251" },
+    { checks: 0 }, { checks: NaN }, { checks: Infinity }, { verification: { schema: "other", checks: verifiedProof().verification.checks } }])
+    assert.equal(M.invariantLabel({ ...verifiedProof(), ...change }).proved, false);
+});
+
+// ------------------------------------------------------------------ 1.3.5: engine compatibility (OB-195)
+const withDigest = (digest) => ({ ...base, daemon: { ...base.daemon, version: "1.9.2", codeSetSha256: digest } });
+test("engineCompatibility: only an engine publishing this plugin's code-set digest is compatible", () => {
+  assert.equal(M.engineCompatibility(withDigest(M.SUPPORTED_CODE_SET_SHA256)).compatible, true);
+  const other = M.engineCompatibility(withDigest("sha256:" + "0".repeat(64)));
+  assert.equal(other.compatible, false);
+  assert.ok(other.reason.includes("code set"));
+  const none = M.engineCompatibility(base);
+  assert.equal(none.compatible, false);
+  assert.ok(none.reason.includes("does not declare"));
+  assert.equal(M.engineCompatibility(null).compatible, false);
+});
+test("isMutatingArgv: read-only commands pass; everything else counts as mutating", () => {
+  for (const argv of [["worldline", "adapters", "--json"], ["worldline", "doctor", "--json"], ["worldline", "doctor", "--refresh", "--json"],
+    ["worldline", "anchor", "--json"], ["worldline", "anchor", "pin", "--json"],
+    ["worldline", "transaction", "show", TX, "--json"], ["worldline", "transaction", "list", "--json"], ["worldline", "root", "list", "--json"],
+    ["worldline", "root", "add", "--dry-run", "--json", "--", "/p"], ["worldline", "root", "remove", "--dry-run", "--json", "--", "/p"],
+    ["worldline", "init", "--dry-run", "--json", "--", "/p"], ["worldline", "status"], ["tail", "-c", "65536", "--", "/x"]])
+    assert.equal(M.isMutatingArgv(argv), false, argv.join(" "));
+  for (const argv of [["worldline", "collapse", "--prepare", "--json", "--", "w"], ["worldline", "return", "--prepare", "--json", "--", "w"],
+    ["worldline", "anchor", "rotate", "--json"], ["worldline", "anchor", "future"], ["worldline", "root", "future", "--dry-run"],
+    ["worldline", "transaction", "commit", TX, "--yes", "--json"], ["worldline", "transaction", "abort", TX, "--json"],
+    ["worldline", "fork", "a", "--mission-text", "m", "--json", "--", "claude"], ["worldline", "race", "--detach", "--json"],
+    ["worldline", "cancel", "--json", "--", "w"], ["worldline", "switch", "--json", "--", "w"], ["worldline", "inspect", "--json", "--", "w"],
+    ["worldline", "root", "add", "--yes", "--json", "--", "/p"], ["worldline", "root", "remove", "--yes", "--json", "--", "/p"],
+    ["worldline", "init", "--yes", "--json", "--", "/p"], ["worldline", "prune"], ["worldline", "something-new"]])
+    assert.equal(M.isMutatingArgv(argv), true, argv.join(" "));
+});
+test("commandRefusal: an incompatible engine refuses every mutating command and no read", () => {
+  const bad = M.engineCompatibility(base);
+  assert.ok(M.commandRefusal(bad, ["worldline", "transaction", "commit", TX, "--yes", "--json"]).startsWith("worldline: ENGINE_INCOMPATIBLE: "));
+  assert.equal(M.commandRefusal(bad, ["worldline", "transaction", "show", TX, "--json"]), "");
+  const good = M.engineCompatibility(withDigest(M.SUPPORTED_CODE_SET_SHA256));
+  assert.equal(M.commandRefusal(good, ["worldline", "transaction", "commit", TX, "--yes", "--json"]), "");
+  for (const missing of [null, {}, { compatible: "true" }])
+    assert.ok(M.commandRefusal(missing, ["worldline", "transaction", "commit", TX, "--yes", "--json"]).startsWith("worldline: ENGINE_INCOMPATIBLE: "));
+});
+test("actionFailureText: a failure whose outcome is not known says so instead of reading as a refusal", () => {
+  assert.ok(M.actionFailureText("cancel w", deadline).includes("outcome unknown"));
+  assert.ok(!M.actionFailureText("cancel w", { code: "NO_ACTIVE_JOB", message: "no job", details: null }).includes("outcome unknown"));
 });
 
 console.log(`${passed} passed${process.exitCode ? ", with failures" : ""}`);

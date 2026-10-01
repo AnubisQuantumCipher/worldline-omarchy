@@ -38,6 +38,7 @@ BarWidget {
     if (world && world.state) line += "  · " + world.state
     if (runningJobs > 0) line += "  · " + runningJobs + " job" + (runningJobs === 1 ? "" : "s") + " running"
     if (stale) line += "  · signal " + signalState
+    if (!Model.engineCompatibility(lastGoodStatus).compatible) line += "  · INCOMPATIBLE ENGINE (no changes are sent)"
     return line
   }
   readonly property color barForeground: bar ? bar.barForeground : Color.foreground

@@ -1,0 +1,7 @@
+{
+  "exitCode": 1,
+  "note": "Constructed from the named engine source path (wire format of cli_main.py), not captured from a live daemon.",
+  "source": "engine 631d0d5 (v1.9.1): daemon.py:341 (a handler exception after the exchange reaches the client as INTERNAL_ERROR with no state; ledger-delta-1.9.2.md A11)",
+  "stderr": "worldline: INTERNAL_ERROR: daemon operation failed\n",
+  "stdout": ""
+}

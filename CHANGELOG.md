@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.3.5 — unreleased candidate · transaction outcomes and engine compatibility
+
+- Failed or interrupted commits are resolved from the engine's transaction record. A committed
+  transaction retains its COMMITTED result and reports subsequent failures as warnings. A stopped
+  request remains unknown while its outcome is being read. An unreadable success response also
+  requires readback; an exit status alone never establishes COMMITTED.
+- Contradictory exchange observations or a record naming another transaction do not establish
+  a commit or a refusal. The UI keeps the outcome unconfirmed.
+- Mutating commands require an explicitly compatible engine code vocabulary, declared by
+  `daemon.codeSetSha256`. The independent source scanner and code-table check cover every
+  enumerated engine code, including dynamic admission and private-evaluator code families.
+  The current inventory describes uncommitted WORLDLINE 1.9.2 candidate sources; an immutable
+  release pairing is still pending. The release gate requires an inventory generated from the
+  reviewed engine commit and refuses the current working-tree inventory. A read-only release
+  job checks the final pair against the declared engine release manifest before publication.
+- The proof label reads the engine's `worldline-proof-status-v2` schema. It requires the complete
+  named check roster, strict passing values, and a recorded proof run before displaying PROVED.
+  This is presentation of the engine's evidence, not an independent proof or authentication of
+  that evidence. Legacy and incomplete records retain an explicit qualification.
+- Model tests and offscreen Qt panel tests cover successful, refused, interrupted, malformed,
+  and contradictory responses with an isolated CLI stand-in. They do not exercise a live daemon,
+  production promotion, or the authority boundary. Those obligations remain open until their
+  own required evidence exists.
+
 ## 1.3.4 — 2026-09-30 · the installer restarts the shell or rescans it, never both
 
 - **`install.sh` no longer asks the shell to rescan its plugins right before restarting it.**

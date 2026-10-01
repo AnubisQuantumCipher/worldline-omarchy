@@ -5,13 +5,80 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  assure-and-publish:
+  validate-pair:
     runs-on: ubuntu-24.04
+    outputs:
+      engine-commit: ${{ steps.identities.outputs.engine_commit }}
+      plugin-commit: ${{ steps.identities.outputs.plugin_commit }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Resolve the declared engine release to an immutable commit
+        id: identities
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, re, subprocess
+          inventory = json.loads(pathlib.Path("tools/engine-codes.json").read_text())
+          version = inventory["engine"]["version"]
+          assert re.fullmatch(r"\d+\.\d+\.\d+", version), "invalid declared engine version"
+          tag = "v" + version
+          engine = json.loads(subprocess.check_output([
+              "gh", "api", "repos/AnubisQuantumCipher/worldline/commits/" + tag
+          ], text=True))["sha"]
+          plugin = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          assert re.fullmatch(r"[0-9a-f]{40}", engine) and re.fullmatch(r"[0-9a-f]{40}", plugin)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"engine_commit={engine}\nplugin_commit={plugin}\nengine_tag={tag}\n")
+          PY
+      - uses: actions/checkout@v4
+        with:
+          repository: AnubisQuantumCipher/worldline
+          ref: ${{ steps.identities.outputs.engine_commit }}
+          path: .paired-engine
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch the declared engine release manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENGINE_TAG: ${{ steps.identities.outputs.engine_tag }}
+        run: |
+          mkdir -p .paired-release
+          gh release download "$ENGINE_TAG" --repo AnubisQuantumCipher/worldline --pattern release-manifest.json --dir .paired-release
+          mv .paired-release/release-manifest.json .paired-release/engine-release-manifest.json
+      - name: Verify both final commits, the plugin archive and code inventories
+        env:
+          ENGINE_COMMIT: ${{ steps.identities.outputs.engine_commit }}
+          PLUGIN_COMMIT: ${{ steps.identities.outputs.plugin_commit }}
+        run: |
+          node tools/check-code-table.mjs --release
+          python3 tools/check-release-pair.py \
+            --engine-repo .paired-engine --engine-commit "$ENGINE_COMMIT" \
+            --plugin-repo . --plugin-commit "$PLUGIN_COMMIT" \
+            --manifest .paired-release/engine-release-manifest.json > .paired-release/release-pair.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-pair
+          path: |
+            .paired-release/release-pair.json
+            .paired-release/engine-release-manifest.json
+          include-hidden-files: true
+          if-no-files-found: error
+
+  assure-and-publish:
+    needs: validate-pair
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Tag matches manifest version
         run: |
           tag="${GITHUB_REF_NAME#v}"
@@ -20,12 +87,41 @@ jobs:
           python3 -c 'import json; m=json.load(open("manifest.json")); assert m["id"]=="khephri.worldline" and set(m["kinds"])=={"service","overlay","bar-widget"}'
       - name: Model.js unit tests
         run: node tools/test-model.mjs
+      - name: Engine code vocabulary and compatibility digest
+        run: node tools/check-code-table.mjs --release
+      - name: Final release pair validator fixtures
+        run: python3 tools/test-release-pair.py -v
+      - name: Qt modules for isolated panel rendering
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qt6-declarative-dev-tools qml6-module-qttest qml6-module-qtquick qml6-module-qtquick-layouts qml6-module-qtquick-window qml6-module-qtqml-workerscript
+      - name: Commit outcome and proof label rendering
+        run: node tools/test-collapse-panel.mjs
       - name: Plain-text sink check (every QML string stays out of a markup renderer)
         run: node tools/check-plain-text.mjs
       - name: Bounded-process check (every Process is bounded in bytes and in time)
         run: node tools/check-bounded-processes.mjs
       - name: Installer reload control (runs install.sh in every shell environment; restart or rescan, never both)
         run: node tools/test-install-reload.mjs
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-pair
+          path: dist
+      - name: Pair validation belongs to these exact final identities
+        env:
+          ENGINE_COMMIT: ${{ needs.validate-pair.outputs.engine-commit }}
+          PLUGIN_COMMIT: ${{ needs.validate-pair.outputs.plugin-commit }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          pair = json.loads(pathlib.Path("dist/release-pair.json").read_text())
+          manifest = json.loads(pathlib.Path("dist/engine-release-manifest.json").read_text())
+          checkout = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          assert pair["accepted"] is True and pair["externalManifestChecked"] is True
+          assert pair["pluginCommit"] == checkout == os.environ["PLUGIN_COMMIT"]
+          assert pair["engineCommit"] == manifest["commit"] == os.environ["ENGINE_COMMIT"]
+          assert manifest["pluginCompatibility"]["plugin"]["commit"] == checkout
+          PY
       - name: Deterministic archive from the tagged tree
         run: |
           mkdir -p dist
@@ -38,4 +134,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           notes=$(awk -v tag="${GITHUB_REF_NAME#v}" 'BEGIN{p=0} /^## /{ if (p) exit; if (index($0, tag)) p=1 } p' CHANGELOG.md)
-          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.sha256 --title "khephri.worldline $GITHUB_REF_NAME" --notes "$notes"$'\n\n'"Release commit: $(git rev-parse HEAD)"
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.sha256 dist/release-pair.json dist/engine-release-manifest.json --title "khephri.worldline $GITHUB_REF_NAME" --notes "$notes"$'\n\n'"Release commit: $(git rev-parse HEAD)"

@@ -21,6 +21,8 @@ Item {
   property var cliEnvironment: ({})
   property string primeLabel: "PRIME"
   property bool adaptersLoading: false
+  // The running engine's compatibility (Model.engineCompatibility); an incompatible engine is sent no fork or race.
+  property var engine: ({ compatible: false, reason: "no engine status has been read" })
 
   property bool raceMode: false
   property string mission: ""
@@ -43,6 +45,7 @@ Item {
     return false
   }
   readonly property string blockedReason: root.fixture ? "fixture data — launching is disabled"
+    : !root.engine.compatible ? "incompatible engine — nothing is sent: " + root.engine.reason
     : !root.initialized ? "no PRIME — register a root first"
     : root.signalState !== "live" ? "daemon signal is " + root.signalState
     : root.mission.trim() === "" ? "write a mission"
@@ -141,7 +144,7 @@ Item {
     return false
   }
 
-  WlCall { id: launchCall; environment: root.cliEnvironment; seconds: 300 }
+  WlCall { id: launchCall; environment: root.cliEnvironment; engine: root.engine; seconds: 300 }
 
   ColumnLayout {
     anchors.fill: parent

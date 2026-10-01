@@ -1,0 +1,7 @@
+{
+  "exitCode": 0,
+  "note": "Constructed from the named engine source path (wire format of cli_main.py), not captured from a live daemon.",
+  "source": "engine 631d0d5 (v1.9.1): transaction.listing()",
+  "stderr": "",
+  "stdout": "[\n  {\n    \"candidateAlias\": \"w1\",\n    \"candidateWorld\": \"3a9f0c1d-2b3e-4f50-8a1b-c2d3e4f5a6b7\",\n    \"committedAt\": null,\n    \"createdAt\": \"2099-01-01T00:00:00Z\",\n    \"error\": null,\n    \"kind\": \"collapse\",\n    \"quarantined\": false,\n    \"state\": \"PREPARED\",\n    \"transactionId\": \"7f3c1e2a-5b6d-4e8f-9a0b-1c2d3e4f5a6b\"\n  }\n]\n"
+}

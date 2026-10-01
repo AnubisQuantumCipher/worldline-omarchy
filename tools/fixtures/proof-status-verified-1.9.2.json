@@ -1,0 +1,26 @@
+{
+  "state": "PROVED",
+  "evaluable": true,
+  "proofGate": "ran",
+  "checks": 251,
+  "verification": {
+    "schema": "worldline-proof-status-v2",
+    "checks": [
+      {"name": "library-selection", "ok": true},
+      {"name": "manifest-readable", "ok": true},
+      {"name": "proof-sources-present", "ok": true},
+      {"name": "library-identity", "ok": true},
+      {"name": "manifest", "ok": true},
+      {"name": "contract-pins", "ok": true},
+      {"name": "zero-exceptions", "ok": true},
+      {"name": "floor", "ok": true},
+      {"name": "summary-digest-recorded", "ok": true},
+      {"name": "coverage", "ok": true},
+      {"name": "source-hashes", "ok": true},
+      {"name": "library-hash", "ok": true},
+      {"name": "proof-gate", "ok": true},
+      {"name": "summary", "ok": true}
+    ]
+  },
+  "fixtureNote": "Synthetic success record matching ProofStatus.inspect and proof_manifest.CHECK_NAMES in the paired 1.9.2 working tree; not evidence that a proof ran."
+}
